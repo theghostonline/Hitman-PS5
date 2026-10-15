@@ -2,6 +2,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netinet/in.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
@@ -29,6 +30,44 @@ static void stop_previous(int port) {
     if (send(fd, REQ, sizeof(REQ) - 1, 0) > 0) (void)recv(fd, buf, sizeof(buf), 0);
   }
   close(fd);
+}
+
+// <data_dir>/server.pid names the newest instance. An older one whose listener died is not asked
+// to stop by the handoff (the port is free), and its patcher would keep patching the game next to
+// the new one's; it exits as soon as the file names another process.
+static char g_pidfile[600];
+
+static void *generation_watch(void *arg) {
+  (void)arg;
+  char mine[32];
+  snprintf(mine, sizeof(mine), "%d", (int)getpid());
+  for (;;) {
+    sleep(1);
+    char cur[32] = "";
+    FILE *f = fopen(g_pidfile, "r");
+    if (!f) continue;
+    if (!fgets(cur, sizeof(cur), f)) cur[0] = '\0';
+    fclose(f);
+    cur[strcspn(cur, "\r\n")] = '\0';
+    if (cur[0] && strcmp(cur, mine)) {
+      LOGI("instance %s took over (this is %s), exiting", cur, mine);
+      _exit(0);
+    }
+  }
+  return NULL;
+}
+
+static void claim_generation(void) {
+  snprintf(g_pidfile, sizeof(g_pidfile), "%s/server.pid", g_cfg.data_dir);
+  FILE *f = fopen(g_pidfile, "w");
+  if (!f) {
+    LOGW("cannot write %s, older instances will not notice this one", g_pidfile);
+    return;
+  }
+  fprintf(f, "%d\n", (int)getpid());
+  fclose(f);
+  pthread_t th;
+  if (pthread_create(&th, NULL, generation_watch, NULL) == 0) pthread_detach(th);
 }
 
 int main(int argc, char **argv) {
@@ -62,6 +101,8 @@ int main(int argc, char **argv) {
     usleep(100 * 1000);
   }
   LOGI("listening on %s:%d, game ver %s, rpc version %s", g_cfg.bind, g_cfg.port, g_cfg.game_ver, g_cfg.rpc_version);
+  if (g_cfg.upstream[0]) LOGI("proxy mode: game requests go to %s", g_cfg.upstream);
+  claim_generation();
 
   if (g_cfg.patch_enabled) patcher_start();
   notify("HITMAN 3 local server %s on port %d", HS_VERSION, g_cfg.port);

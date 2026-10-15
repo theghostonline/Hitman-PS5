@@ -14,3 +14,4 @@ upstream/
 server/build/
 server/*.elf
 runtime/
+backups/

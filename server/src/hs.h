@@ -9,7 +9,7 @@
 #include <jansson.h>
 
 #define HS_NAME    "hitman-server"
-#define HS_VERSION "0.2.0"
+#define HS_VERSION "0.2.1"
 
 #ifdef __PROSPERO__
 #define HS_DEFAULT_CONFIG "/data/hitman-server/config.ini"

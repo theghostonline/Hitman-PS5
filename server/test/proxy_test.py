@@ -318,9 +318,22 @@ def main(binary):
               "unreachable upstream is a fast 502")
         st, h, body = px.request("GET", "/healthz")
         check("UNREACHABLE" in json.loads(body)["upstream"], "healthz shows the upstream down")
-        st, h, body = px.request("POST", "/admin/shutdown")
-        check(st == 200, "admin shutdown stays local in proxy mode")
-        px.proc.wait(5)
+        # A newer instance on the same data directory (but another port, as when the old one's
+        # listener died) makes the old one exit, so two patchers never run side by side.
+        newer_cfg = os.path.join(px.dir, "newer.ini")
+        newer_port = free_port()
+        with open(px.config) as f:
+            cfg = f.read().replace(f"port = {px.port}", f"port = {newer_port}")
+        with open(newer_cfg, "w") as f:
+            f.write(cfg)
+        newer = subprocess.Popen([os.path.abspath(binary), newer_cfg], stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+        try:
+            px.proc.wait(5)
+            check(px.proc.returncode == 0, "the older instance exits when a newer one starts")
+        finally:
+            newer.terminate()
+            newer.wait(5)
     finally:
         px.stop()
         up.close()

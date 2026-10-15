@@ -50,17 +50,12 @@ test: $(HOST)
 	python3 -I test/flow_test.py $(HOST)
 	python3 -I test/proxy_test.py $(HOST)
 
-# Payload Manager 0.6.x keeps uploads in /data/pldmgr/payloads/local/<name>/ and wants its request
-# marker on every change. A new instance asks the running one to exit before it binds the port.
-PM      := http://$(PS5_HOST):$(PM_PORT)
-PM_HDRS := -H "X-PLDMGR-Request: 1" -H "Origin: $(PM)"
-
+# Backs up the console's ELF/config/db/log, uploads and verifies the ELF (Payload Manager 0.6.x,
+# payloads/local/hitman-server/), the config (CONFIG=path, optional) and the H3 package, then
+# starts it; the new instance takes over from the running one. See ../scripts/deploy-console.sh,
+# which also has "rollback <backup dir>".
 deploy: $(ELF)
-	@mode=$$(curl -fsS $(PM_HDRS) "$(PM)/manage:check?filename=$(ELF)" | grep -q '"file_exists":true' && echo replace || echo new); \
-	curl -fsS -X POST $(PM_HDRS) -H "Content-Type: application/octet-stream" --data-binary @$(ELF) \
-	  "$(PM)/manage:upload?filename=$(ELF)&mode=$$mode" && echo " uploaded ($$mode)"
-	@curl -fsS -X POST $(PM_HDRS) "$(PM)/loadpayload:/data/pldmgr/payloads/local/hitman-server/$(ELF)" && echo " started"
-	@sleep 3; curl -fsS "http://$(PS5_HOST):8000/healthz"; echo
+	PS5_HOST=$(PS5_HOST) PM_PORT=$(PM_PORT) ../scripts/deploy-console.sh deploy $(CONFIG)
 
 clean:
 	rm -rf build $(ELF)

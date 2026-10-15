@@ -34,6 +34,8 @@ typedef struct {
 } conn_t;
 
 static int          g_listen_fd = -1;
+static char         g_listen_addr[64];
+static int          g_listen_port;
 static volatile int g_stopping;
 static int          g_active;  // open connections, updated with __atomic builtins
 
@@ -618,6 +620,8 @@ int http_listen(const char *bind_addr, int port) {
     return err;
   }
   g_listen_fd = fd;
+  if (bind_addr != g_listen_addr) snprintf(g_listen_addr, sizeof(g_listen_addr), "%s", bind_addr);
+  g_listen_port = port;
   return 0;
 }
 
@@ -629,6 +633,7 @@ void http_run(http_handler_t handler) {
   pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
   pthread_attr_setstacksize(&attr, 512 * 1024);
 
+  int failures = 0;
   while (!g_stopping) {
     struct sockaddr_in peer;
     socklen_t plen = sizeof(peer);
@@ -636,10 +641,30 @@ void http_run(http_handler_t handler) {
     if (cfd < 0) {
       if (errno == EINTR || errno == ECONNABORTED) continue;
       if (g_stopping) break;
-      LOGE("accept: %s", strerror(errno));
+      // Seen on the console: the listening socket stops working (accept fails with 0xa3 on
+      // every call, e.g. after the network comes back from rest mode). Log once, then open a
+      // new listener; when the port is taken a newer instance owns it and this one leaves.
+      if (failures++ == 0) LOGE("accept: %s; reopening the listener", strerror(errno));
       usleep(100000);
+      if (failures < 20) continue;
+      close(fd);
+      g_listen_fd = -1;
+      int err = http_listen(g_listen_addr, g_listen_port);
+      if (err == EADDRINUSE) {
+        LOGW("port %d now belongs to another instance, exiting", g_listen_port);
+        _exit(0);
+      }
+      if (err) {
+        LOGE("reopening the listener failed: %s, retrying", strerror(err));
+        failures = 1;
+        continue;
+      }
+      fd = g_listen_fd;
+      LOGI("listener reopened on port %d", g_listen_port);
+      failures = 0;
       continue;
     }
+    failures = 0;
     struct timeval tv = {IO_TIMEOUT_S, 0};
     setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     setsockopt(cfd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));

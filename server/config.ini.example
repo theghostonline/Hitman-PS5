@@ -1,7 +1,7 @@
 # hitman-server configuration. Copy to /data/hitman-server/config.ini on the console.
 # Every key is optional; the values below are the defaults.
 
-# Listen address. The game uses 127.0.0.1; 0.0.0.0 also makes the server reachable on the LAN.
+# Listen address. The game uses 127.0.0.1; 0.0.0.0 also makes /healthz reachable on the LAN (lan_access).
 bind = 0.0.0.0
 port = 8000
 
@@ -36,3 +36,11 @@ patch_domain =
 
 # debug | info | warn | error
 log_level = info
+
+# Proxy mode: forward every game request to a full Peacock server (upstream/Peacock, ps5-port
+# branch) at http://<ipv4>:<port>. Empty: standalone mode with the built-in handlers.
+upstream =
+# Seconds to wait for one upstream exchange.
+upstream_timeout = 30
+# health: the LAN only gets /healthz (default). full: every route (e.g. flow_test.py --remote).
+lan_access = health

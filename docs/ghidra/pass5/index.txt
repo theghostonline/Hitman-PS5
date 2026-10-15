@@ -1,0 +1,67 @@
+SERVICE ProfileService at 01d1022f
+SERVICE ReportingService at 01d1023e
+SERVICE HubPagesService at 01d24219
+SERVICE UnlockableService at 01d2eba7
+SERVICE GamePersistentDataService at 01d386a3
+SERVICE DefaultLoadoutService at 01d4b470
+SERVICE MultiplayerService at 01d72843
+SERVICE ContractSessionsService at 01d7e936
+SERVICE AuthenticationService at 01d83992
+SERVICE EventsService at 01d88e64
+SERVICE ContractsService at 01d8de75
+SERVICE ChallengesService at 01d98079
+D 0x0140ba38 -> sub_130ba38
+D 0x0140b82a -> sub_130b82a
+D 0x013127da -> sub_12127da
+D 0x013115aa -> sub_12115aa
+FUNC 00d73134 sub_c73134 :: svc:ProfileService @00d731d8 | svc:ProfileService @00d73202
+FUNC 00d7263a sub_c7263a :: svc:ProfileService @00d7270a | svc:ProfileService @00d7273b
+FUNC 00d71df0 sub_c71df0 :: svc:ProfileService @00d71f46 | svc:ProfileService @00d71f77
+FUNC 00d770ce sub_c770ce :: svc:ProfileService @00d77255 | svc:ProfileService @00d77286
+FUNC 00d76192 sub_c76192 :: svc:ProfileService @00d765e4 | svc:ProfileService @00d76618
+FUNC 00d75778 sub_c75778 :: svc:ProfileService @00d75966 | svc:ProfileService @00d75997
+FUNC 00aaaf98 sub_9aaf98 :: svc:ProfileService @00aab29c | svc:ProfileService @00aab2d0
+FUNC 00d2e2ba sub_c2e2ba :: svc:ProfileService @00d2e4b6 | svc:ProfileService @00d2e4e7
+FUNC 00d52c76 sub_c52c76 :: svc:ProfileService @00d53243 | svc:ProfileService @00d53277
+FUNC 00d544a4 sub_c544a4 :: svc:ProfileService @00d54cf9 | svc:ProfileService @00d54d1f
+FUNC 00d4b834 sub_c4b834 :: svc:ProfileService @00d4c436 | svc:ProfileService @00d4c46a
+FUNC 00d42970 sub_c42970 :: svc:ProfileService @00d42b14 | svc:ProfileService @00d42b45
+FUNC 00d46750 sub_c46750 :: svc:ProfileService @00d46ce4 | svc:ProfileService @00d46d18
+FUNC 00d458fe sub_c458fe :: svc:ProfileService @00d45dc7 | svc:ProfileService @00d45dfb
+FUNC 00c371c6 sub_b371c6 :: svc:ReportingService @00c3743b | svc:ReportingService @00c3746f
+FUNC 00c3fcc0 sub_b3fcc0 :: svc:HubPagesService @00c4085f | svc:HubPagesService @00c4088c | svc:HubPagesService @00c4028b | svc:HubPagesService @00c402b8 | svc:HubPagesService @00c40b81 | svc:HubPagesService @00c40bb5 | svc:HubPagesService @00c40588 | svc:HubPagesService @00c405bc
+FUNC 00af0e7a sub_9f0e7a :: svc:HubPagesService @00af12b6
+FUNC 00d35ca0 sub_c35ca0 :: svc:HubPagesService @00d35f30 | svc:HubPagesService @00d35f3d | svc:HubPagesService @00d35d78
+FUNC 00d74984 sub_c74984 :: svc:HubPagesService @00d74a3d
+FUNC 00b50780 sub_a50780 :: svc:HubPagesService @00b507d5
+FUNC 00d55486 sub_c55486 :: svc:HubPagesService @00d55b36 | svc:HubPagesService @00d55b60
+FUNC 00b4b9de sub_a4b9de :: svc:HubPagesService @00b4ba43
+FUNC 00b49938 sub_a49938 :: svc:HubPagesService @00b49aae
+FUNC 00b4cdde sub_a4cdde :: svc:HubPagesService @00b4d3be
+FUNC 00a85bfa sub_985bfa :: svc:HubPagesService @00a869ea | svc:HubPagesService @00a86a12 | svc:ChallengesService @00a86025 | svc:ChallengesService @00a86056
+FUNC 00b05674 sub_a05674 :: svc:UnlockableService @00b059d6 | svc:UnlockableService @00b05a0b
+FUNC 00aeba10 sub_9eba10 :: svc:GamePersistentDataService @00aebd03 | svc:GamePersistentDataService @00aebd34
+FUNC 00d6f636 sub_c6f636 :: svc:GamePersistentDataService @00d6f730 | svc:GamePersistentDataService @00d6f761
+FUNC 00d6ee44 sub_c6ee44 :: svc:GamePersistentDataService @00d6ef60 | svc:GamePersistentDataService @00d6ef91
+FUNC 00d6dd0a sub_c6dd0a :: svc:DefaultLoadoutService @00d6de00 | svc:DefaultLoadoutService @00d6de31
+FUNC 00d703ae sub_c703ae :: svc:MultiplayerService @00d704ca | svc:MultiplayerService @00d704fb
+FUNC 00d94186 sub_c94186 :: svc:MultiplayerService @00d94802 | svc:MultiplayerService @00d94836
+FUNC 00d8b232 sub_c8b232 :: svc:MultiplayerService @00d8ba61 | svc:MultiplayerService @00d8ba72 | svc:MultiplayerService @00d8b454 | svc:MultiplayerService @00d8b481
+FUNC 00d89954 sub_c89954 :: svc:MultiplayerService @00d8a8a2 | svc:MultiplayerService @00d8a8c8 | svc:MultiplayerService @00d89fd5 | svc:MultiplayerService @00d8a002 | svc:MultiplayerService @00d8af45 | svc:MultiplayerService @00d8af6b | svc:MultiplayerService @00d8a265 | svc:MultiplayerService @00d8a292
+FUNC 00b03608 sub_a03608 :: svc:MultiplayerService @00b038d6 | svc:MultiplayerService @00b0390a
+FUNC 00aa0b9c sub_9a0b9c :: svc:ContractSessionsService @00aa1233 | svc:ContractSessionsService @00aa1267
+FUNC 00a9309a sub_99309a :: svc:ContractSessionsService @00a93469 | svc:ContractSessionsService @00a9349d
+FUNC 00d7d438 sub_c7d438 :: svc:AuthenticationService @00d7d599 | svc:AuthenticationService @00d7d5ca
+FUNC 00d74aa4 sub_c74aa4 :: svc:AuthenticationService @00d74e11 | svc:AuthenticationService @00d74e3e
+FUNC 00d373d0 sub_c373d0 :: svc:EventsService @00d37c1d | svc:EventsService @00d37c51
+FUNC 00d6e5ee sub_c6e5ee :: svc:EventsService @00d6e76a | svc:EventsService @00d6e79b
+FUNC 00bf9d1c sub_af9d1c :: svc:ContractsService @00bf9ef7 | svc:ContractsService @00bf9f28
+FUNC 00aef758 sub_9ef758 :: svc:ContractsService @00aefb10 | svc:ContractsService @00aefb44
+FUNC 00d6d050 sub_c6d050 :: svc:ContractsService @00d6d19b | svc:ContractsService @00d6d1cc
+FUNC 00aa4e4e sub_9a4e4e :: svc:ContractsService @00aa54a3 | svc:ContractsService @00aa54d4
+FUNC 00a9feb6 sub_99feb6 :: svc:ContractsService @00aa01bc | svc:ContractsService @00aa01ed
+FUNC 00ab0e92 sub_9b0e92 :: svc:ChallengesService @00ab107f | svc:ChallengesService @00ab10b0
+FUNC 0140ba38 sub_130ba38 :: direct:0x0140ba38
+FUNC 0140b82a sub_130b82a :: direct:0x0140b82a
+FUNC 013127da sub_12127da :: direct:0x013127da
+FUNC 013115aa sub_12115aa :: direct:0x013115aa
