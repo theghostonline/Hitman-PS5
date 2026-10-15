@@ -9,8 +9,10 @@ and a menu JSON, because PC builds ship their dynamic repository themselves.
 
 This tool reads the console's base repository ([assembly:/repository/pro.repo].ps5_repo) from the
 game's own chunk0.rpkg, over FTP byte ranges, and writes a package with that repository under the
-dynamic id plus Peacock's resources. The output is derived from the user's own game files: it is
-written to the runtime directory and must not be committed or shared.
+dynamic id plus Peacock's resources, stored under the ids of their ".ps5_" paths (Peacock keys them
+by their ".pc_" paths, which the console never looks up; that showed as Peacock's "dynamic
+resource package has not been loaded" modal). The output is derived from the user's own game
+files: it is written to the runtime directory and must not be committed or shared.
 
 usage: python3 -I tools/ps5_dynamic_resources.py \
           --chunk0 ftp://192.168.0.37:2121/data/homebrew/PPSA16387-app0_HITMAN_3/runtime/chunk0.rpkg \
@@ -34,6 +36,18 @@ def runtime_id(path):
 
 BASE_REPO = runtime_id("[assembly:/repository/pro.repo].ps5_repo")
 DYNAMIC_REPO = runtime_id("[assembly:/repository/pro.repo](fullgame,dynamic).ps5_repo")
+
+# Peacock's package overrides base-game resources by their PC ids. The same resources have
+# ".ps5_" paths on the console (both found in its chunk0.rpkg), so they are stored under those.
+# Paths from Peacock's resources/rebuildLocale.cjs and the Glacier hash list.
+PEACOCK_PATHS = [
+    # Peacock's strings, H3 LOCR (same 10-language layout as the PS5 original)
+    "[assembly:/localization/hitman6/conversations/ui/pro/menutext_drp.sweetmenutext].{}_localized-textlist",
+    # debrief buttons without the elusive restrictions (otherwise identical to the PS5 original)
+    "[assembly:/_pro/online/default/cloudstorage/resources/pages/common/views/debriefing/"
+    "debriefingfailedbuttons.json].{}_json",
+]
+REKEY = {runtime_id(p.format("pc")): (runtime_id(p.format("ps5")), p.format("ps5")) for p in PEACOCK_PATHS}
 
 
 def read_range(src, start, length):
@@ -111,10 +125,24 @@ def lz4_block_decompress(src, size):
     return bytes(out)
 
 
+_index_cache = {}
+
+
+def load_index(src):
+    if src not in _index_cache:
+        head = read_range(src, 0, 64)
+        index_at, count, index_size, table_size = parse_header(head)
+        _index_cache[src] = (index_at, count, index_size, table_size, read_range(src, index_at, index_size))
+    return _index_cache[src]
+
+
+def contains(src, wanted):
+    index_at, count, index_size, table_size, index = load_index(src)
+    return any(struct.unpack_from("<Q", index, i * 20)[0] == wanted for i in range(count))
+
+
 def extract(src, wanted):
-    head = read_range(src, 0, 64)
-    index_at, count, index_size, table_size = parse_header(head)
-    index = read_range(src, index_at, index_size)
+    index_at, count, index_size, table_size, index = load_index(src)
     position = None
     for i in range(count):
         h, doff, dsize = struct.unpack_from("<QQI", index, i * 20)
@@ -183,6 +211,19 @@ def main():
     # Same table entry (type, sizes, references) and data, under the dynamic id, stored plain.
     dyn = {"hash": DYNAMIC_REPO, "size_field": 0, "stored": repo, "raw": entry["raw"], "type": "REPO"}
     peacock = read_package(a.peacock)
+    for r in peacock:
+        if r["hash"] not in REKEY:
+            print(f"  {r['hash']:016X}.{r['type']}: no known PS5 path, kept under its PC id (the console "
+                  f"will not use it)", file=sys.stderr)
+            continue
+        ps5_id, ps5_path = REKEY[r["hash"]]
+        if not contains(a.chunk0, ps5_id):
+            raise SystemExit(f"{ps5_path} ({ps5_id:016X}) is not in the console's chunk0: not this game build?")
+        ps5_entry, _ = extract(a.chunk0, ps5_id)
+        if ps5_entry["type"] != r["type"]:
+            raise SystemExit(f"{ps5_id:016X} is a {ps5_entry['type']} on the console, Peacock's is a {r['type']}")
+        print(f"  {r['hash']:016X}.{r['type']} -> {ps5_id:016X} {ps5_path}")
+        r["hash"] = ps5_id
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     write_package(a.out, [dyn] + peacock)
 
