@@ -3,6 +3,9 @@
 # the PS5 hitman-server proxy. State lives in runtime/peacock/, never in the source tree.
 #
 #   scripts/backend.sh build      install dependencies, pack resources, build chunk0.js + web UI
+#   scripts/backend.sh ps5pkg     (re)build the PS5 dynamic resources package from the console's
+#                                 own game files (needs the console on, PS5_HOST/FTP_PORT) and the
+#                                 rebranded locale; writes runtime/peacock/ps5/dynamic_resources_ps5.rpkg
 #   scripts/backend.sh start      start on 0.0.0.0:$PEACOCK_PORT (default 8410)
 #   scripts/backend.sh stop|status|logs
 set -eu
@@ -23,6 +26,16 @@ case "${1:-}" in
     cd "$SRC"
     "$YARN" install --immutable
     "$YARN" build
+    ;;
+  ps5pkg)
+    host="${PS5_HOST:-192.168.0.37}"
+    ftp="${FTP_PORT:-2121}"
+    "$NODE" --version >/dev/null 2>&1 || true
+    python3 -I "$ROOT/tools/ps5_dynamic_resources.py" \
+      --chunk0 "ftp://$host:$ftp/data/homebrew/PPSA16387-app0_HITMAN_3/runtime/chunk0.rpkg" \
+      --peacock "$SRC/resources/dynamic_resources_h3.rpkg" \
+      --locale "$SRC/resources/locale.json" \
+      --out "$RUN/ps5/dynamic_resources_ps5.rpkg"
     ;;
   start)
     if running; then echo "already running (pid $(cat "$PIDFILE"))"; exit 0; fi
@@ -56,6 +69,6 @@ case "${1:-}" in
     tail -n "${2:-100}" "$LOG"
     ;;
   *)
-    echo "usage: $0 build|start|stop|status|logs [n]"; exit 2
+    echo "usage: $0 build|ps5pkg|start|stop|status|logs [n]"; exit 2
     ;;
 esac

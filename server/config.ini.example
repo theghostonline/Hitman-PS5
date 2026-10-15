@@ -44,3 +44,8 @@ upstream =
 upstream_timeout = 30
 # health: the LAN only gets /healthz (default). full: every route (e.g. flow_test.py --remote).
 lan_access = health
+
+# Add-ons installed for these other HITMAN 3 title ids (/user/addcont/<title>/<label>) are added to
+# the list the game gets from the system, which only covers add-ons of the running title. Only the
+# 23 add-on labels this build knows are used. Empty: off.
+dlc_titles = PPSA01768,PPSA01769,PPSA02124,PPSA02125,PPSA03975,PPSA03976

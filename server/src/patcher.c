@@ -30,8 +30,13 @@ void patcher_status(char *out, size_t n) {
 #include <sys/user.h>
 #include <unistd.h>
 
+#include <dirent.h>
+#include <sys/stat.h>
+
 #include <ps5/kernel.h>
 #include <ps5/mdbg.h>
+
+#include "x86stub.h"
 
 // The title id starts at byte 16 (seen on FW 13.60: the SDK ps sample's struct, with a 64-bit
 // field at offset 8, reads it 4 bytes late). Oversized so the kernel never writes past it.
@@ -200,32 +205,6 @@ static bool still_running(pid_t pid) {
 // small stubs written into the unused tail of its last code page. Only the game's own calls go
 // through these slots, the system libraries are untouched.
 #define VA_STUB_AREA  0x1c03ce0  // text ends at 0x1c03cdc, the code page runs to 0x1c04000
-#define STUB_AREA_LEN 0x320
-
-typedef struct {
-  uint8_t b[STUB_AREA_LEN];
-  size_t  n;
-} code_t;
-
-static void emit(code_t *c, const void *p, size_t n) {
-  if (c->n + n > sizeof(c->b)) {
-    c->n = sizeof(c->b) + 1;  // force the fit check to fail
-    return;
-  }
-  memcpy(c->b + c->n, p, n);
-  c->n += n;
-}
-#define E(...)                          \
-  do {                                  \
-    const uint8_t b_[] = {__VA_ARGS__}; \
-    emit(c, b_, sizeof(b_));            \
-  } while (0)
-static void e32(code_t *c, uint32_t v) { emit(c, &v, 4); }
-static void e64(code_t *c, uint64_t v) { emit(c, &v, 8); }
-static size_t align16(code_t *c) {
-  while (c->n % 16) E(0xCC);
-  return c->n;
-}
 
 // mov eax, value; ret
 static size_t stub_return(code_t *c, uint32_t value) {
@@ -337,7 +316,9 @@ static hook_t g_hooks[] = {
     {"sceNpAuthGetAuthorizationCodeV3", 0x2564650, 0},
     {"sceNpAuthPollAsync", 0x2564658, 0},
     {"sceNpAuthDeleteRequest", 0x2564660, 0},
+    {"sceNpEntitlementAccessGetAddcontEntitlementInfoList", 0x25645b8, 0},  // only with add-ons to add
 };
+#define HOOK_ENTITLEMENTS 14
 #define NHOOKS (sizeof(g_hooks) / sizeof(g_hooks[0]))
 
 int sceUserServiceInitialize(void *params);
@@ -374,6 +355,88 @@ static void psn_identity(char online_id[17], uint64_t *account_id, char country[
 
 static pid_t    g_hooked_pid = -1;
 static intptr_t g_stub_addr[NHOOKS];
+
+// ---------------------------------------------------------------- add-on entitlements
+// The game asks sceNpEntitlementAccessGetAddcontEntitlementInfoList which add-ons it owns and
+// knows these 23 labels (the table in sub_122fcd0). The system only lists add-ons installed for
+// the running title, so add-ons installed for another HITMAN 3 title (PPSA01768 and the other
+// SKUs the eboot names) are invisible to PPSA16387. The patcher looks for those under
+// /user/addcont/<title>/<label>/ac.pkg and has the hook add them (x86stub.h).
+static const char *const KNOWN_LABELS[] = {
+    "H1LEGACYSTANDARD", "H1LEGACYEXPANSIO", "H2LEGACYSTANDARD", "H2LEGACYEXPANSIO", "00000H3PREORDERB",
+    "HITMANDELXPACK03", "DLC0000000000020", "DLC0000000000021", "DLC0000000000022", "DLC0000000000023",
+    "DLC0000000000024", "DLC0000000000025", "0000000007SINS01", "0000000007SINS02", "0000000007SINS03",
+    "0000000007SINS04", "0000000007SINS05", "0000000007SINS06", "0000000007SINS07", "0000000007SINSSP",
+    "H3TRILOGYPREMIUM", "000000000000EG01", "000000000000EG02",
+};
+#define NKNOWN (sizeof(KNOWN_LABELS) / sizeof(KNOWN_LABELS[0]))
+
+// Unused, mapped, readable padding after the TLS template in the RELRO segment (that segment
+// ends at 0x25719b0 in the file, its pages run to 0x2574000; TLS template 0x25719c0-0x2571a68).
+// The code page is execute-only, so the stub's label table lives here.
+#define VA_ENT_TABLE  0x2572000
+#define ENT_TABLE_MAX 64
+
+typedef struct {
+  char     magic[4];  // "HSEN"
+  uint32_t count;
+  uint8_t  entries[ENT_TABLE_MAX][ENT_ENTRY];
+} ent_table_t;
+
+static bool known_label(const char *s) {
+  for (size_t i = 0; i < NKNOWN; i++)
+    if (!strcmp(s, KNOWN_LABELS[i])) return true;
+  return false;
+}
+
+// Add-ons installed for the other titles in dlc_titles, as hook table entries. Returns the count.
+static uint32_t collect_addons(ent_table_t *t, char *names, size_t names_len) {
+  memset(t, 0, sizeof(*t));
+  memcpy(t->magic, "HSEN", 4);
+  names[0] = '\0';
+  size_t no = 0;
+  char titles[sizeof(g_cfg.dlc_titles)];
+  snprintf(titles, sizeof(titles), "%s", g_cfg.dlc_titles);
+  for (char *save = NULL, *title = strtok_r(titles, ", ", &save); title; title = strtok_r(NULL, ", ", &save)) {
+    if (!strcmp(title, g_cfg.title_id) || strlen(title) != 9) continue;  // the system lists those itself
+    char dir[64];
+    snprintf(dir, sizeof(dir), "/user/addcont/%s", title);
+    DIR *d = opendir(dir);
+    if (!d) continue;
+    for (struct dirent *e; (e = readdir(d)) != NULL;) {
+      if (strlen(e->d_name) != 16 || !known_label(e->d_name)) continue;
+      char pkg[128];
+      struct stat st;
+      snprintf(pkg, sizeof(pkg), "%s/%s/ac.pkg", dir, e->d_name);
+      if (stat(pkg, &st) || !S_ISREG(st.st_mode)) continue;
+      bool dup = false;
+      for (uint32_t i = 0; i < t->count; i++)
+        if (!memcmp(t->entries[i], e->d_name, 16)) dup = true;
+      if (dup || t->count >= ENT_TABLE_MAX) continue;
+      memcpy(t->entries[t->count++], e->d_name, 16);  // label + NUL; type and status 0
+      if (no + 20 < names_len) no += (size_t)snprintf(names + no, names_len - no, "%s%s/%s", no ? " " : "", title, e->d_name);
+    }
+    closedir(d);
+  }
+  return t->count;
+}
+
+// Writes the table into the game's padding, after checking the padding is unused (zero) or holds
+// an earlier table. Returns false when it is neither.
+static bool write_ent_table(pid_t pid, intptr_t base, const ent_table_t *t) {
+  uint8_t cur[sizeof(*t)];
+  if (mem_read(pid, base + VA_ENT_TABLE, cur, sizeof(cur))) {
+    LOGE("patcher: add-on table area 0x%lx is not readable", (long)(base + VA_ENT_TABLE));
+    return false;
+  }
+  bool ours = !memcmp(cur, "HSEN", 4), zero = true;
+  for (size_t i = 0; i < sizeof(cur) && zero; i++) zero = cur[i] == 0;
+  if (!ours && !zero) {
+    LOGE("patcher: add-on table area 0x%lx is in use, add-ons not added", (long)(base + VA_ENT_TABLE));
+    return false;
+  }
+  return mem_write(pid, base + VA_ENT_TABLE, t, sizeof(*t)) == 0;
+}
 
 // Code writes go through the debugger path, which keeps the page executable. The PLT shares this
 // page, so its protection must keep execute. XOM pages may not read back; a successful debug write
@@ -451,6 +514,29 @@ static int psn_hooks(pid_t pid, intptr_t base) {
     g_hooks[11].stub = stub_auth_code(c, auth, 256);
     g_hooks[12].stub = stub_out32(c, 0);  // auth poll finished, result 0
     g_hooks[13].stub = stub_return(c, 0);
+
+    // Add-ons installed for other HITMAN 3 titles. Without any, the call is left alone.
+    static ent_table_t table;
+    char names[512];
+    bool ents = false;
+    if (collect_addons(&table, names, sizeof(names))) {
+      // The linker records the module as libSceNpEntitlementAccess.prx; try .sprx too in case the
+      // resolver wants the SDK's suffix (as it does for libSceNpManager.sprx above).
+      uint32_t ea = 0;
+      intptr_t real_ent = 0;
+      if (kernel_dynlib_handle(pid, "libSceNpEntitlementAccess.prx", &ea) == 0 ||
+          kernel_dynlib_handle(pid, "libSceNpEntitlementAccess.sprx", &ea) == 0)
+        real_ent = kernel_dynlib_dlsym(pid, ea, "sceNpEntitlementAccessGetAddcontEntitlementInfoList");
+      if (real_ent <= 0) {
+        LOGW("patcher: libSceNpEntitlementAccess not resolved, add-ons from other titles not added");
+      } else if (write_ent_table(pid, base, &table)) {
+        g_hooks[HOOK_ENTITLEMENTS].stub = stub_entitlements(c, (uint64_t)real_ent, (uint64_t)(base + VA_ENT_TABLE));
+        ents = true;
+        LOGI("patcher: %u add-on(s) from other titles will be listed to the game: %s", table.count, names);
+      }
+    } else {
+      LOGI("patcher: no add-ons installed for the titles in dlc_titles (%s)", g_cfg.dlc_titles);
+    }
     if (code.n >= STUB_AREA_LEN) {
       LOGE("patcher: PSN stubs do not fit (%zu bytes)", code.n);
       return -1;
@@ -464,18 +550,24 @@ static int psn_hooks(pid_t pid, intptr_t base) {
       return -1;
     }
     for (size_t i = 0; i < NHOOKS; i++) g_stub_addr[i] = base + VA_STUB_AREA + (intptr_t)g_hooks[i].stub;
+    if (!ents) g_stub_addr[HOOK_ENTITLEMENTS] = 0;
     g_hooked_pid = pid;
     LOGI("patcher: %zu bytes of PSN stubs at 0x%lx", code.n, (long)(base + VA_STUB_AREA));
   }
 
   int set = 0;
   for (size_t i = 0; i < NHOOKS; i++) {
+    if (!g_stub_addr[i]) continue;
     intptr_t slot = base + g_hooks[i].got, now = 0;
     if (mem_read(pid, slot, &now, sizeof(now))) continue;
     if (now == g_stub_addr[i]) continue;
     if (mem_write(pid, slot, &g_stub_addr[i], sizeof(intptr_t)) == 0) {
       set++;
-      LOGI("patcher: %s -> stub (was 0x%lx)", g_hooks[i].name, (long)now);
+      // A slot still pointing into the eboot is unresolved (lazy binding): the game has not called
+      // it yet. One pointing into a library means it was called before the hook.
+      bool early = now >= base && now < base + VA_STUB_AREA;
+      LOGI("patcher: %s -> stub (was 0x%lx, %s)", g_hooks[i].name, (long)now,
+           early ? "not called yet" : "already called before the hook");
     } else {
       LOGE("patcher: hooking %s failed", g_hooks[i].name);
     }

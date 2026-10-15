@@ -27,6 +27,8 @@ import struct
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 XOR_KEY = bytes([0xDC, 0x45, 0xA6, 0x9C, 0xD3, 0x72, 0x4C, 0xAB])
 
 
@@ -198,6 +200,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--chunk0", required=True, help="PS5 chunk0.rpkg (path or ftp:// URL)")
     ap.add_argument("--peacock", required=True, help="Peacock's dynamic_resources_h3.rpkg")
+    ap.add_argument("--locale", help="Peacock's resources/locale.json; rebuilds the LOCR from it "
+                    "(so rebranding takes effect without the Windows HMLanguageTools)")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
 
@@ -211,6 +215,28 @@ def main():
     # Same table entry (type, sizes, references) and data, under the dynamic id, stored plain.
     dyn = {"hash": DYNAMIC_REPO, "size_field": 0, "stored": repo, "raw": entry["raw"], "type": "REPO"}
     peacock = read_package(a.peacock)
+
+    if a.locale:
+        # Rebuild the LOCR from locale.json so brand changes apply. Stored plain (size_field 0),
+        # like the repository: the game reads uncompressed resources from the package too.
+        import locr as locr_mod
+        loc = json.loads(open(a.locale, encoding="utf-8").read())
+        names = {"en": "english", "fr": "french", "it": "italian", "de": "german", "es": "spanish",
+                 "ru": "russian", "cn": "chineseSimplified", "tc": "chineseTraditional", "jp": "japanese"}
+        langs = [("xx", [(locr_mod.key_hash("UI_DRP_001"), "UI_DRP_001")])]
+        for lang in locr_mod.LANGS[1:]:
+            langs.append((lang, [(locr_mod.key_hash(k), v) for k, v in loc[names[lang]].items()]))
+        built = locr_mod.encode(langs)
+        for r in peacock:
+            if r["type"] == "LOCR":
+                r["stored"], r["size_field"] = built, 0
+                # The uncompressed size lives at offset +12 of the table entry; update it so the
+                # game (and the readback check) reads the whole rebuilt resource.
+                raw = bytearray(r["raw"])
+                struct.pack_into("<I", raw, 12, len(built))
+                r["raw"] = bytes(raw)
+                print(f"  rebuilt LOCR from {a.locale}: {len(built)} bytes, stored plain")
+
     for r in peacock:
         if r["hash"] not in REKEY:
             print(f"  {r['hash']:016X}.{r['type']}: no known PS5 path, kept under its PC id (the console "

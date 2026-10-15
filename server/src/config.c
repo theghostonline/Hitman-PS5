@@ -24,6 +24,8 @@ static void defaults(void) {
   snprintf(g_cfg.title_id, sizeof(g_cfg.title_id), "PPSA16387");
   g_cfg.psn_bypass = true;
   snprintf(g_cfg.psn_country, sizeof(g_cfg.psn_country), "gb");
+  // HITMAN 3 title ids the PS5 eboot names (sub_122fcd0), plus the US release PPSA01768.
+  snprintf(g_cfg.dlc_titles, sizeof(g_cfg.dlc_titles), "PPSA01768,PPSA01769,PPSA02124,PPSA02125,PPSA03975,PPSA03976");
   g_cfg.upstream_timeout = 30;
 }
 
@@ -89,6 +91,7 @@ static int apply(const char *k, const char *v) {
   else if (!strcmp(k, "psn_online_id")) COPY(psn_online_id);
   else if (!strcmp(k, "psn_account_id")) COPY(psn_account_id);
   else if (!strcmp(k, "psn_country")) COPY(psn_country);
+  else if (!strcmp(k, "dlc_titles")) COPY(dlc_titles);
   else if (!strcmp(k, "upstream")) COPY(upstream);
   else if (!strcmp(k, "upstream_timeout")) return parse_int(k, v, &g_cfg.upstream_timeout, 2, 600);
   else if (!strcmp(k, "lan_access")) {

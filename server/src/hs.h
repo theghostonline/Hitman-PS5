@@ -9,7 +9,7 @@
 #include <jansson.h>
 
 #define HS_NAME    "hitman-server"
-#define HS_VERSION "0.2.1"
+#define HS_VERSION "0.3.0"
 
 #ifdef __PROSPERO__
 #define HS_DEFAULT_CONFIG "/data/hitman-server/config.ini"
@@ -46,6 +46,7 @@ typedef struct {
   char   psn_online_id[17]; // fallback online id; empty: the PS5 user name
   char   psn_account_id[24];// fallback account id (decimal); empty: derived from the online id
   char   psn_country[4];    // fallback account country
+  char   dlc_titles[256];   // other title ids whose installed add-ons the game is told about
   // Proxy mode (docs/ARCHITECTURE_PS5_PEACOCK.md): when upstream is set, every game request is
   // forwarded to the full Peacock server there and the built-in handlers are not used.
   char   upstream[256];     // "http://<ipv4>:<port>"; empty: standalone (legacy) mode

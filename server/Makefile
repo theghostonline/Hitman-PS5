@@ -46,9 +46,17 @@ host: $(HOST)
 $(HOST): $(DEPS)
 	$(CC) $(CFLAGS) $(HOST_CFLAGS) -o $@ $(SRCS) $(HOST_LDFLAGS) -ljansson -lsqlite3 -lpthread
 
-test: $(HOST)
+test: $(HOST) stubtest
 	python3 -I test/flow_test.py $(HOST)
 	python3 -I test/proxy_test.py $(HOST)
+
+# The add-on entitlement stub (x86stub.h) runs on the host: x86-64 natively, Rosetta on arm64.
+stubtest: build/stub_test
+	./build/stub_test
+
+build/stub_test: test/stub_test.c src/x86stub.h
+	@mkdir -p build
+	$(CC) -arch x86_64 -O1 -g -fno-omit-frame-pointer -Wall -Wextra -Werror -Isrc -o $@ test/stub_test.c
 
 # Backs up the console's ELF/config/db/log, uploads and verifies the ELF (Payload Manager 0.6.x,
 # payloads/local/hitman-server/), the config (CONFIG=path, optional) and the H3 package, then
@@ -60,4 +68,4 @@ deploy: $(ELF)
 clean:
 	rm -rf build $(ELF)
 
-.PHONY: all host test deploy clean
+.PHONY: all host test stubtest deploy clean
