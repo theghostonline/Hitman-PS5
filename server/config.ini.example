@@ -1,0 +1,38 @@
+# hitman-server configuration. Copy to /data/hitman-server/config.ini on the console.
+# Every key is optional; the values below are the defaults.
+
+# Listen address. The game uses 127.0.0.1; 0.0.0.0 also makes the server reachable on the LAN.
+bind = 0.0.0.0
+port = 8000
+
+# Base URL written into the config response. Empty: use the Host the request came in on.
+public_url =
+
+# Database, server.log and resources/ live here.
+data_dir = /data/hitman-server
+
+# Versions[].GAME_VER (must be 8.x.y) and the Version value for the RPC header.
+game_ver = 8.12.0
+rpc_version = 8.12.0
+
+# OAuth access token lifetime, and how long a refresh token stays valid after that (seconds).
+token_ttl = 3600
+refresh_ttl = 2592000
+
+# Init.ias. Must be non-zero: 0 sends the game to its signup screen.
+ias = 1
+
+# Seconds the game waits between SaveAndSynchronizeEvents4 polls.
+next_poll = 10
+
+# JSON file of { "extensionName": value } that new profiles start with.
+seed_extensions =
+
+# Patch the running game in memory so it talks to this server.
+patch = true
+title_id = PPSA16387
+# At most 15 characters. Empty: 127.0.0.1:<port>.
+patch_domain =
+
+# debug | info | warn | error
+log_level = info

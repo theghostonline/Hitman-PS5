@@ -1,0 +1,89 @@
+service	method	request_keys	ghidra_fn	site	callers
+AuthenticationService	GetBlobOfflineCacheDatabaseDiff	productVersion	0x00d7d438	0xd7d572	
+AuthenticationService	GetBlobOfflineCacheDatabaseDiff	productVersion	0x00d7d438	0xd7d582	
+AuthenticationService	RenewBlobSignature	etsPingInterval	0x00d74aa4	0xd74dea	
+AuthenticationService	RenewBlobSignature	etsPingInterval	0x00d74aa4	0xd74dfa	
+ChallengesService	GetActiveChallengesAndProgression	contractId,difficultyLevel	0x00a85bfa	0xa85ffe	sub_994dc8@00a94dc8, sub_996cc8@00a96cc8
+ChallengesService	GetActiveChallengesAndProgression	contractId,difficultyLevel	0x00a85bfa	0xa8600e	sub_994dc8@00a94dc8, sub_996cc8@00a96cc8
+ChallengesService	GetProgression	profileid,challengeids	0x00ab0e92	0xab1058	
+ChallengesService	GetProgression	profileid,challengeids	0x00ab0e92	0xab1068	
+ContractSessionsService	Load	profileId,contractSessionId,saveToken,contractId,difficultyLevel	0x00a9309a	0xa9343a	
+ContractSessionsService	Load	profileId,contractSessionId,saveToken,contractId,difficultyLevel	0x00a9309a	0xa93448	
+ContractSessionsService	Start	profileId,contractId,difficultyLevel	0x00aa0b9c	0xaa120c	sub_a3854a@00b3854a, sub_99309a@00a9309a, sub_9a5bc6@00aa5bc6
+ContractSessionsService	Start	profileId,contractId,difficultyLevel	0x00aa0b9c	0xaa121c	sub_a3854a@00b3854a, sub_99309a@00a9309a, sub_9a5bc6@00aa5bc6
+ContractsService	CreateFromParams	creationData	0x00bf9d1c	0xbf9ed0	sub_afb206@00bfb206, sub_af5bf4@00bf5bf4
+ContractsService	CreateFromParams	creationData	0x00bf9d1c	0xbf9ee0	sub_afb206@00bfb206, sub_af5bf4@00bf5bf4
+ContractsService	GetContractOpportunities	ContractID,el,contractId	0x00aa4e4e	0xaa547c	sub_6702c0@007702c0
+ContractsService	GetContractOpportunities	el,contractId	0x00aa4e4e	0xaa548c	sub_6702c0@007702c0
+ContractsService	GetForPlay	id,locationId,extraGameChangerIds,difficultyLevel	0x00aef758	0xaefae9	
+ContractsService	GetForPlay	id,locationId,extraGameChangerIds,difficultyLevel	0x00aef758	0xaefaf9	
+ContractsService	GetForPlay2	id,locationId,extraGameChangerIds,difficultyLevel	0x00d6d050	0xd6d174	sub_9a0b9c@00aa0b9c
+ContractsService	GetForPlay2	id,locationId,extraGameChangerIds,difficultyLevel	0x00d6d050	0xd6d184	sub_9a0b9c@00aa0b9c
+ContractsService	ResetGroupContract	contractId	0x00a9feb6	0xaa0192	sub_9a5bc6@00aa5bc6, sub_b22906@00c22906, sub_b27126@00c27126, sub_b1e6a6@00c1e6a6, sub_672d64@00772d64, sub_66ecc2@0076ecc2, sub_993c3e@00a93c3e, sub_a4b9de@00b4b9de, sub_9a4e4e@00aa4e4e, sub_a3854a@
+ContractsService	ResetGroupContract	contractId	0x00a9feb6	0xaa01a4	sub_9a5bc6@00aa5bc6, sub_b22906@00c22906, sub_b27126@00c27126, sub_b1e6a6@00c1e6a6, sub_672d64@00772d64, sub_66ecc2@0076ecc2, sub_993c3e@00a93c3e, sub_a4b9de@00b4b9de, sub_9a4e4e@00aa4e4e, sub_a3854a@
+DefaultLoadoutService	Set	location,loadout	0x00d6dd0a	0xd6ddd9	sub_aa2a7a@00ba2a7a, sub_b29782@00c29782, sub_b90d22@00c90d22
+DefaultLoadoutService	Set	location,loadout	0x00d6dd0a	0xd6dde9	sub_aa2a7a@00ba2a7a, sub_b29782@00c29782, sub_b90d22@00c90d22
+EventsService	SaveAndSynchronizeEvents4	userId,values,lastEventTicks,clienttype,lastPushDt	0x00d6e5ee	0xd6e743	sub_c41976@00d41976, sub_c373d0@00d373d0
+EventsService	SaveAndSynchronizeEvents4	userId,values,lastEventTicks,clienttype,lastPushDt	0x00d6e5ee	0xd6e753	sub_c41976@00d41976, sub_c373d0@00d373d0
+EventsService	SaveEvents2	userId,values	0x00d373d0	0xd37bf6	sub_c35ca0@00d35ca0, sub_c7a576@00d7a576, sub_c77ce4@00d77ce4
+EventsService	SaveEvents2	userId,values	0x00d373d0	0xd37c06	sub_c35ca0@00d35ca0, sub_c7a576@00d7a576, sub_c77ce4@00d77ce4
+GamePersistentDataService	AddFeedback	userId,report	0x00aeba10	0xaebcdc	
+GamePersistentDataService	AddFeedback	userId,report	0x00aeba10	0xaebcec	
+GamePersistentDataService	GetData	userId,key	0x00d6f636	0xd6f709	sub_b3d970@00c3d970, sub_b9378c@00c9378c, sub_b762d6@00c762d6, sub_b0190a@00c0190a, sub_b8bbd6@00c8bbd6, sub_b1c43e@00c1c43e, sub_af2c2e@00bf2c2e
+GamePersistentDataService	GetData	userId,key	0x00d6f636	0xd6f719	sub_b3d970@00c3d970, sub_b9378c@00c9378c, sub_b762d6@00c762d6, sub_b0190a@00c0190a, sub_b8bbd6@00c8bbd6, sub_b1c43e@00c1c43e, sub_af2c2e@00bf2c2e
+GamePersistentDataService	SaveData	userId,key	0x00d6ee44	0xd6ef39	sub_af3740@00bf3740, sub_b76fcc@00c76fcc, sub_b9506a@00c9506a, sub_b3ea62@00c3ea62, sub_c544a4@00d544a4, sub_b1e288@00c1e288, sub_b020ba@00c020ba, sub_b8cc5c@00c8cc5c, sub_c5767e@00d5767e, sub_b26656@
+GamePersistentDataService	SaveData	userId,key	0x00d6ee44	0xd6ef49	sub_af3740@00bf3740, sub_b76fcc@00c76fcc, sub_b9506a@00c9506a, sub_b3ea62@00c3ea62, sub_c544a4@00d544a4, sub_b1e288@00c1e288, sub_b020ba@00c020ba, sub_b8cc5c@00c8cc5c, sub_c5767e@00d5767e, sub_b26656@
+HubPagesService	GetChallengeTreeFor	contractId,difficultyLevel	0x00a85bfa	0xa869ae	sub_994dc8@00a94dc8, sub_996cc8@00a96cc8
+HubPagesService	GetChallengeTreeFor	contractId,difficultyLevel	0x00a85bfa	0xa869bb	sub_994dc8@00a94dc8, sub_996cc8@00a96cc8
+HubPagesService	GetCurrencyData		0x00c3fcc0	0xc40264	sub_b429d4@00c429d4, sub_b43210@00c43210
+HubPagesService	GetCurrencyData		0x00c3fcc0	0xc40274	sub_b429d4@00c429d4, sub_b43210@00c43210
+HubPagesService	GetMasteryCompletionDataForLocation	locationId	0x00c3fcc0	0xc40561	sub_b429d4@00c429d4, sub_b43210@00c43210
+HubPagesService	GetMasteryCompletionDataForLocation	locationId	0x00c3fcc0	0xc40571	sub_b429d4@00c429d4, sub_b43210@00c43210
+HubPagesService	GetMasteryCompletionDataForUnlockable	unlockableId	0x00c3fcc0	0xc40b5a	sub_b429d4@00c429d4, sub_b43210@00c43210
+HubPagesService	GetMasteryCompletionDataForUnlockable	unlockableId	0x00c3fcc0	0xc40b6a	sub_b429d4@00c429d4, sub_b43210@00c43210
+HubPagesService	GetPlayerProfileXpData		0x00c3fcc0	0xc40838	sub_b429d4@00c429d4, sub_b43210@00c43210
+HubPagesService	GetPlayerProfileXpData		0x00c3fcc0	0xc40848	sub_b429d4@00c429d4, sub_b43210@00c43210
+MultiplayerService	CancelRegistration	ticketId	0x00d8b232	0xd8b426	
+MultiplayerService	CancelRegistration	ticketId	0x00d8b232	0xd8b43d	
+MultiplayerService	GetRequiredResourcesForPreset	id	0x00b03608	0xb038af	
+MultiplayerService	GetRequiredResourcesForPreset	id	0x00b03608	0xb038bf	
+MultiplayerService	RegisterToMatch	gameMode,matchId,presetId	0x00d94186	0xd947d4	
+MultiplayerService	RegisterToMatch	gameMode,matchId,presetId	0x00d94186	0xd947e1	
+MultiplayerService	RegisterToMode		0x00d89954	0xd8a23e	
+MultiplayerService	RegisterToMode		0x00d89954	0xd8a24e	
+MultiplayerService	RegisterToPreset	gamemode,reportedNatType,lobbyId,contractId,previousFailedMatch,platformBlocklist	0x00d89954	0xd89faa	
+MultiplayerService	RegisterToPreset	gamemode,reportedNatType,lobbyId,contractId,previousFailedMatch,platformBlocklist	0x00d89954	0xd89fbe	
+MultiplayerService	SetMatchData	matchId,key,value	0x00d703ae	0xd704a3	sub_6138ce@007138ce, sub_a04c22@00b04c22
+MultiplayerService	SetMatchData	matchId,key,value	0x00d703ae	0xd704b3	sub_6138ce@007138ce, sub_a04c22@00b04c22
+ProfileService	GetFriendsCount		0x00d73134	0xd731b1	sub_af39b8@00bf39b8, sub_b77244@00c77244
+ProfileService	GetFriendsCount		0x00d73134	0xd731c1	sub_af39b8@00bf39b8, sub_b77244@00c77244
+ProfileService	GetProfile	id,extensions	0x00d52c76	0xd5321c	sub_c7df48@00d7df48, sub_c77ce4@00d77ce4
+ProfileService	GetProfile	id,extensions	0x00d52c76	0xd5322c	sub_c7df48@00d7df48, sub_c77ce4@00d77ce4
+ProfileService	GetSemLinkStatus	forceUpdate,isFreePrologueUser,isIntroPackUser,isFullExperienceUser	0x00d71df0	0xd71f22	sub_b33c5e@00c33c5e, sub_a9d0ee@00b9d0ee
+ProfileService	GetSemLinkStatus	forceUpdate,isFreePrologueUser,isIntroPackUser,isFullExperienceUser	0x00d71df0	0xd71f2f	sub_b33c5e@00c33c5e, sub_a9d0ee@00b9d0ee
+ProfileService	GetUserConfig	id	0x00d76192	0xd765b6	
+ProfileService	GetUserConfig	id	0x00d76192	0xd765c3	
+ProfileService	ResolveGamerTags	profileIds	0x00d4b834	0xd4c40f	
+ProfileService	ResolveGamerTags	profileIds	0x00d4b834	0xd4c41f	
+ProfileService	ResolveProfiles	profileIDs	0x00d458fe	0xd45da0	
+ProfileService	ResolveProfiles	profileIDs	0x00d458fe	0xd45db0	
+ProfileService	SetClientEntitlements	entitlements	0x00d2e2ba	0xd2e48f	
+ProfileService	SetClientEntitlements	entitlements	0x00d2e2ba	0xd2e49f	
+ProfileService	SubmitSemEmail	email	0x00d7263a	0xd726e3	sub_b33c5e@00c33c5e, sub_a9d0ee@00b9d0ee
+ProfileService	SubmitSemEmail	email	0x00d7263a	0xd726f3	sub_b33c5e@00c33c5e, sub_a9d0ee@00b9d0ee
+ProfileService	SynchroniseGameStats	profileId,localStats	0x00d544a4	0xd54cc0	sub_c74aa4@00d74aa4, sub_c7ab6a@00d7ab6a
+ProfileService	SynchroniseGameStats	profileId,localStats	0x00d544a4	0xd54ccd	sub_c74aa4@00d74aa4, sub_c7ab6a@00d7ab6a
+ProfileService	SynchronizeOfflineUnlockables	unlockableIds	0x00d42970	0xd42aed	sub_c42162@00d42162, sub_c55486@00d55486
+ProfileService	SynchronizeOfflineUnlockables	unlockableIds	0x00d42970	0xd42afd	sub_c42162@00d42162, sub_c55486@00d55486
+ProfileService	UnconfirmedSignupIoIAccount	email	0x00d770ce	0xd7722e	
+ProfileService	UnconfirmedSignupIoIAccount	email	0x00d770ce	0xd7723e	
+ProfileService	UpdateExtensions	id,extensionsData	0x00d75778	0xd7593f	
+ProfileService	UpdateExtensions	id,extensionsData	0x00d75778	0xd7594f	
+ProfileService	UpdateProfileStats	id,gamerTag,achievements,onlineId	0x00d46750	0xd46cbd	sub_c81d26@00d81d26
+ProfileService	UpdateProfileStats	id,gamerTag,achievements,onlineId	0x00d46750	0xd46ccd	sub_c81d26@00d81d26
+ProfileService	UpdateUserSaveFileTable	clientSaveFileList,deletedSaveFileList	0x00aaaf98	0xaab275	
+ProfileService	UpdateUserSaveFileTable	clientSaveFileList,deletedSaveFileList	0x00aaaf98	0xaab285	
+ReportingService	ReportContract	contractId,reason	0x00c371c6	0xc3740d	
+ReportingService	ReportContract	contractId,reason	0x00c371c6	0xc3741a	
+UnlockableService	Get	id	0x00b05674	0xb059ae	
+UnlockableService	Get	id	0x00b05674	0xb059be	

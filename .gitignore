@@ -1,0 +1,15 @@
+.DS_Store
+# IOI binaries, Ghidra database and decompiled game code: local analysis only, never published.
+ghidra_proj/
+decomp/
+data/
+docs/ghidra/servicemap/functions/
+docs/ghidra/pass2/functions/
+docs/ghidra/pass2_xrefs/w_*.c
+docs/ghidra/*_run.log
+# Pinned toolchain and the separate upstream Peacock clone (its own git repo).
+.tools/
+upstream/
+# Build output
+server/build/
+server/*.elf

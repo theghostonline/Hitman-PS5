@@ -1,0 +1,16 @@
+# Second pass: bearer gating, Version header source, Init and config request builders.
+D 0x00d43dee
+D 0x00f2612e
+D 0x00d43e2a
+D 0x00d5c22c
+D 0x00da3f68
+D 0x00da4812
+D 0x00d7b0b8
+D 0x00d754ac
+D 0x00d4a8aa
+D 0x00d431be
+D 0x00d309fa
+D 0x00d7bb7c
+D 0x00d49462
+D 0x00d7d438
+D 0x00d74aa4
