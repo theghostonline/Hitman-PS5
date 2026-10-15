@@ -13,3 +13,4 @@ upstream/
 # Build output
 server/build/
 server/*.elf
+runtime/
