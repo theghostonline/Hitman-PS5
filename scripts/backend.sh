@@ -35,6 +35,7 @@ case "${1:-}" in
       --chunk0 "ftp://$host:$ftp/data/homebrew/PPSA16387-app0_HITMAN_3/runtime/chunk0.rpkg" \
       --peacock "$SRC/resources/dynamic_resources_h3.rpkg" \
       --locale "$SRC/resources/locale.json" \
+      --store-strings "$SRC/components/ps5/ps5_store_strings.json" \
       --out "$RUN/ps5/dynamic_resources_ps5.rpkg"
     ;;
   start)

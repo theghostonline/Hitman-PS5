@@ -202,6 +202,8 @@ def main():
     ap.add_argument("--peacock", required=True, help="Peacock's dynamic_resources_h3.rpkg")
     ap.add_argument("--locale", help="Peacock's resources/locale.json; rebuilds the LOCR from it "
                     "(so rebranding takes effect without the Windows HMLanguageTools)")
+    ap.add_argument("--store-strings", help="JSON of extra store strings missing from the PS5 LOCR "
+                    "(components/ps5/ps5_store_strings.json); needs --locale")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
 
@@ -223,10 +225,25 @@ def main():
         loc = json.loads(open(a.locale, encoding="utf-8").read())
         names = {"en": "english", "fr": "french", "it": "italian", "de": "german", "es": "spanish",
                  "ru": "russian", "cn": "chineseSimplified", "tc": "chineseTraditional", "jp": "japanese"}
+        # Store strings the PS5 game has no LOCR entry for (its store differed from PC); merged in
+        # so the Store page shows names instead of raw keys. English, into every language.
+        extra = {}
+        if a.store_strings:
+            extra = {k: v for k, v in json.loads(open(a.store_strings, encoding="utf-8").read()).items()
+                     if not k.startswith("_")}
         langs = [("xx", [(locr_mod.key_hash("UI_DRP_001"), "UI_DRP_001")])]
         for lang in locr_mod.LANGS[1:]:
-            langs.append((lang, [(locr_mod.key_hash(k), v) for k, v in loc[names[lang]].items()]))
+            items = [(locr_mod.key_hash(k), v) for k, v in loc[names[lang]].items()]
+            seen = {h for h, _ in items}
+            for k, v in extra.items():
+                h = locr_mod.key_hash(k)
+                if h not in seen:
+                    items.append((h, v))
+                    seen.add(h)
+            langs.append((lang, items))
         built = locr_mod.encode(langs)
+        if extra:
+            print(f"  added {len(extra)} store strings to each language")
         for r in peacock:
             if r["type"] == "LOCR":
                 r["stored"], r["size_field"] = built, 0

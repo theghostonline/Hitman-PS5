@@ -355,6 +355,8 @@ static void psn_identity(char online_id[17], uint64_t *account_id, char country[
 
 static pid_t    g_hooked_pid = -1;
 static intptr_t g_stub_addr[NHOOKS];
+static size_t   g_stub_used;       // bytes of VA_STUB_AREA the PSN stubs use
+static int      g_ent_state;       // 0 not tried, 1 installed, -1 gave up (fits or table failed)
 
 // ---------------------------------------------------------------- add-on entitlements
 // The game asks sceNpEntitlementAccessGetAddcontEntitlementInfoList which add-ons it owns and
@@ -515,28 +517,6 @@ static int psn_hooks(pid_t pid, intptr_t base) {
     g_hooks[12].stub = stub_out32(c, 0);  // auth poll finished, result 0
     g_hooks[13].stub = stub_return(c, 0);
 
-    // Add-ons installed for other HITMAN 3 titles. Without any, the call is left alone.
-    static ent_table_t table;
-    char names[512];
-    bool ents = false;
-    if (collect_addons(&table, names, sizeof(names))) {
-      // The linker records the module as libSceNpEntitlementAccess.prx; try .sprx too in case the
-      // resolver wants the SDK's suffix (as it does for libSceNpManager.sprx above).
-      uint32_t ea = 0;
-      intptr_t real_ent = 0;
-      if (kernel_dynlib_handle(pid, "libSceNpEntitlementAccess.prx", &ea) == 0 ||
-          kernel_dynlib_handle(pid, "libSceNpEntitlementAccess.sprx", &ea) == 0)
-        real_ent = kernel_dynlib_dlsym(pid, ea, "sceNpEntitlementAccessGetAddcontEntitlementInfoList");
-      if (real_ent <= 0) {
-        LOGW("patcher: libSceNpEntitlementAccess not resolved, add-ons from other titles not added");
-      } else if (write_ent_table(pid, base, &table)) {
-        g_hooks[HOOK_ENTITLEMENTS].stub = stub_entitlements(c, (uint64_t)real_ent, (uint64_t)(base + VA_ENT_TABLE));
-        ents = true;
-        LOGI("patcher: %u add-on(s) from other titles will be listed to the game: %s", table.count, names);
-      }
-    } else {
-      LOGI("patcher: no add-ons installed for the titles in dlc_titles (%s)", g_cfg.dlc_titles);
-    }
     if (code.n >= STUB_AREA_LEN) {
       LOGE("patcher: PSN stubs do not fit (%zu bytes)", code.n);
       return -1;
@@ -550,7 +530,9 @@ static int psn_hooks(pid_t pid, intptr_t base) {
       return -1;
     }
     for (size_t i = 0; i < NHOOKS; i++) g_stub_addr[i] = base + VA_STUB_AREA + (intptr_t)g_hooks[i].stub;
-    if (!ents) g_stub_addr[HOOK_ENTITLEMENTS] = 0;
+    g_stub_addr[HOOK_ENTITLEMENTS] = 0;  // installed later, once the game binds the real function
+    g_stub_used = code.n;
+    g_ent_state = 0;  // the entitlement hook is installed later, once the game binds that function
     g_hooked_pid = pid;
     LOGI("patcher: %zu bytes of PSN stubs at 0x%lx", code.n, (long)(base + VA_STUB_AREA));
   }
@@ -573,6 +555,67 @@ static int psn_hooks(pid_t pid, intptr_t base) {
     }
   }
   return set;
+}
+
+// Installs the add-on entitlement hook once the game has bound the real function (its GOT slot
+// points into a library, not the eboot's lazy stub). Called on each tick until it succeeds or is
+// ruled out, because the game binds that function late (ENTITLEMENTS_SYNCHRONIZE), after the PSN
+// stubs go in. The entitlement stub is written after the PSN stubs in the same padding.
+#define EBOOT_SPAN 0x5718000  // the eboot's largest segment end (see data/eboot_imports_exports)
+
+static void entitlement_hook(pid_t pid, intptr_t base) {
+  if (!g_cfg.psn_bypass || !g_cfg.dlc_titles[0] || g_ent_state != 0) return;
+
+  intptr_t slot = base + g_hooks[HOOK_ENTITLEMENTS].got, real = 0;
+  if (mem_read(pid, slot, &real, sizeof(real))) return;
+  // A library address (outside the eboot) means the function is bound; an in-eboot address is the
+  // lazy stub, bound once the game first calls it (ENTITLEMENTS_SYNCHRONIZE). Log the wait once.
+  static bool logged_wait;
+  if (real == 0 || (real >= base && real < base + EBOOT_SPAN)) {
+    if (!logged_wait) {
+      LOGD("patcher: entitlement slot 0x%lx not bound yet (0x%lx), waiting", (long)slot, (long)real);
+      logged_wait = true;
+    }
+    return;
+  }
+
+  ent_table_t table;
+  char        names[512];
+  if (!collect_addons(&table, names, sizeof(names))) {
+    LOGI("patcher: no add-ons installed for the titles in dlc_titles (%s)", g_cfg.dlc_titles);
+    g_ent_state = -1;
+    return;
+  }
+  if (!write_ent_table(pid, base, &table)) {
+    g_ent_state = -1;
+    return;
+  }
+
+  static code_t ent;
+  memset(&ent, 0, sizeof(ent));
+  size_t off = stub_entitlements(&ent, (uint64_t)real, (uint64_t)(base + VA_ENT_TABLE));
+  if (g_stub_used + ent.n > STUB_AREA_LEN) {
+    LOGE("patcher: entitlement stub does not fit (%zu + %zu bytes)", g_stub_used, ent.n);
+    g_ent_state = -1;
+    return;
+  }
+  intptr_t at = base + VA_STUB_AREA + (intptr_t)g_stub_used;
+  if (code_write(pid, at, ent.b, ent.n)) {
+    LOGE("patcher: writing the entitlement stub failed");
+    g_ent_state = -1;
+    return;
+  }
+  intptr_t stub = at + (intptr_t)off;
+  if (mem_write(pid, slot, &stub, sizeof(stub))) {
+    LOGE("patcher: pointing the entitlement slot at the stub failed");
+    g_ent_state = -1;
+    return;
+  }
+  g_stub_used += ent.n;
+  g_stub_addr[HOOK_ENTITLEMENTS] = stub;  // psn_hooks re-points it if the game rebinds the slot
+  g_ent_state = 1;
+  LOGI("patcher: %u add-on(s) from other titles listed to the game (real fn 0x%lx): %s", table.count, (long)real,
+       names);
 }
 
 typedef enum { PATCH_OK, PATCH_RETRY, PATCH_WRONG_BUILD, PATCH_GONE } patch_rc_t;
@@ -730,6 +773,7 @@ static void *patcher_main(void *arg) {
     }
     if (base) {
       psn_hooks(pid, base);
+      entitlement_hook(pid, base);  // installs once the game binds the entitlement function
       if (++ticks % 50 == 0) verify_patch(pid, base);  // every ~5 s
     }
     // Follow the game's connection state so the log shows how far the online flow gets.
