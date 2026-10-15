@@ -15,3 +15,5 @@ server/build/
 server/*.elf
 runtime/
 backups/
+# Release zips
+dist/

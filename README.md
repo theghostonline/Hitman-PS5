@@ -34,38 +34,50 @@ to the backend. Nothing on disk is changed.
 
 ## Install
 
-1. **Start the backend** on your computer:
-   ```sh
-   scripts/backend.sh build
-   scripts/backend.sh ps5pkg    # builds the PS5 resource package from your console's game files
-   scripts/backend.sh start     # listens on port 8410
-   ```
-2. **Point the payload at it.** Create `/data/hitman-server/config.ini` on the PS5:
-   ```ini
-   upstream = http://<your-computer-ip>:8410
-   ```
-3. **Load the payload.** Grab `hitman-server-0.3.2.elf` from the
-   [latest release](https://github.com/theghostonline/Hitman-PS5/releases/latest)
-   and load it with Payload Manager, or send it to an elfldr on port 9021.
+Everything is on the [latest release](https://github.com/theghostonline/Hitman-PS5/releases/latest).
+You need two things from it: `hitman-server-0.3.2.elf` for the PS5, and the
+backend zip for your computer (Windows, macOS Apple Silicon, macOS Intel or Linux).
+Node is bundled, so there's nothing else to install.
+
+1. **Start the backend.** Unzip it, then:
+   - Windows: double-click `Start Server.cmd`
+   - macOS / Linux: open a terminal in the folder and run `sh start.sh`
+
+   On the first run it asks for your PS5's IP. Have the PS5 on with an FTP
+   server running (etaHEN or ftpsrv) and ideally HITMAN 3 open. It finds the
+   game and builds the PS5 resource package from your own game files, which
+   takes about 20 seconds and only happens once.
+2. **Point the payload at it.** The backend window shows a line like
+   `upstream = http://192.168.1.100:8410`. Put that line in the `config.ini`
+   from the zip and copy it to the PS5 as `/data/hitman-server/config.ini`.
+3. **Load the payload.** Load `hitman-server-0.3.2.elf` with Payload Manager,
+   or send it to an elfldr on port 9021.
 4. **Optional:** add `local/hitman-server` to Payload Manager's autoload list so
-   it starts on every boot. The backend needs to be running whenever you play.
+   it starts on every boot.
 5. **Start HITMAN 3.** You'll get a notification once the game is patched,
    then it connects online by itself.
 
+Keep the backend window open whenever you play. Your progress is saved in the
+backend folder (`userdata/`), so keep that folder when you update.
+
 ## Troubleshooting
 
-- Not connecting? Check the backend is up (`scripts/backend.sh status`) and
-  that the IP in `config.ini` is right.
-- `http://<ps5-ip>:8000/healthz` shows the payload version and the game's
-  online state.
-- Logs: `/data/hitman-server/server.log` on the PS5, `scripts/backend.sh logs`
-  on the computer.
+- Not connecting? Check the backend window is still open and that the IP in
+  `config.ini` matches the one it shows.
+- `http://<ps5-ip>:8000/healthz` shows the payload version, whether it can
+  reach the backend, and the game's online state.
+- First run can't find the game? Open HITMAN 3 on the PS5 and start the
+  backend again. If you moved the game files somewhere unusual, run
+  `node/bin/node build-ps5-package.mjs <ps5-ip> --chunk0 ftp://<ps5-ip>:2121/<path>/runtime/chunk0.rpkg`
+  (Windows: `node\node.exe`).
+- Payload log: `/data/hitman-server/server.log` on the PS5.
 
 ## Building
 
 ```sh
-make -C server          # ps5-payload-sdk v0.43+ with the jansson and sqlite3 ports
+make -C server                        # payload: ps5-payload-sdk v0.43+ with jansson and sqlite3
 make -C server test
+scripts/package-release.sh <version>  # backend zips, from the backend source on the release page
 ```
 
 Technical notes on the game's online protocol are in
