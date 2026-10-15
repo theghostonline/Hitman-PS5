@@ -24,6 +24,7 @@ static void defaults(void) {
   snprintf(g_cfg.title_id, sizeof(g_cfg.title_id), "PPSA16387");
   g_cfg.psn_bypass = true;
   snprintf(g_cfg.psn_country, sizeof(g_cfg.psn_country), "gb");
+  g_cfg.upstream_timeout = 30;
 }
 
 static char *trim(char *s) {
@@ -88,6 +89,13 @@ static int apply(const char *k, const char *v) {
   else if (!strcmp(k, "psn_online_id")) COPY(psn_online_id);
   else if (!strcmp(k, "psn_account_id")) COPY(psn_account_id);
   else if (!strcmp(k, "psn_country")) COPY(psn_country);
+  else if (!strcmp(k, "upstream")) COPY(upstream);
+  else if (!strcmp(k, "upstream_timeout")) return parse_int(k, v, &g_cfg.upstream_timeout, 2, 600);
+  else if (!strcmp(k, "lan_access")) {
+    if (str_ieq(v, "health")) g_cfg.lan_full = false;
+    else if (str_ieq(v, "full")) g_cfg.lan_full = true;
+    else { fprintf(stderr, "config: lan_access must be health or full\n"); return -1; }
+  }
   else fprintf(stderr, "config: ignoring unknown key \"%s\"\n", k);
   return 0;
 }
@@ -97,6 +105,43 @@ static bool valid_game_ver(const char *v) {
   unsigned a, b, c;
   char extra;
   return sscanf(v, "%u.%u.%u%c", &a, &b, &c, &extra) == 3 && a == 8;
+}
+
+// upstream = http://<host>:<port>[/]. The console has no TLS client here and payload DNS is not
+// dependable, so the host must be an IPv4 literal on the PS5; host builds also accept names.
+static int parse_upstream(void) {
+  size_t n = strlen(g_cfg.upstream);
+  while (n > 0 && g_cfg.upstream[n - 1] == '/') g_cfg.upstream[--n] = '\0';
+  if (!n) return 0;
+  if (strncmp(g_cfg.upstream, "http://", 7)) {
+    fprintf(stderr, "config: upstream must be http://<host>:<port> (no https on the console)\n");
+    return -1;
+  }
+  const char *h = g_cfg.upstream + 7;
+  const char *colon = strrchr(h, ':');
+  if (strchr(h, '/') || !colon || colon == h || (size_t)(colon - h) >= sizeof(g_cfg.upstream_host)) {
+    fprintf(stderr, "config: upstream must be http://<host>:<port> with no path, got \"%s\"\n", g_cfg.upstream);
+    return -1;
+  }
+  snprintf(g_cfg.upstream_host, sizeof(g_cfg.upstream_host), "%.*s", (int)(colon - h), h);
+  if (parse_int("upstream port", colon + 1, &g_cfg.upstream_port, 1, 65535)) return -1;
+#ifdef __PROSPERO__
+  unsigned a, b, c, d;
+  char extra;
+  if (sscanf(g_cfg.upstream_host, "%u.%u.%u.%u%c", &a, &b, &c, &d, &extra) != 4 || a > 255 || b > 255 || c > 255 ||
+      d > 255) {
+    fprintf(stderr, "config: upstream host must be an IPv4 address on the console, got \"%s\"\n", g_cfg.upstream_host);
+    return -1;
+  }
+#endif
+  // Forwarding to ourselves would loop until the connection limit is hit.
+  bool self = !strcmp(g_cfg.upstream_host, "localhost") || !strncmp(g_cfg.upstream_host, "127.", 4) ||
+              !strcmp(g_cfg.upstream_host, "0.0.0.0") || !strcmp(g_cfg.upstream_host, g_cfg.bind);
+  if (self && g_cfg.upstream_port == g_cfg.port) {
+    fprintf(stderr, "config: upstream %s is this server's own address\n", g_cfg.upstream);
+    return -1;
+  }
+  return 0;
 }
 
 // Returns 0 on success. A missing file is fine (defaults are used).
@@ -140,6 +185,7 @@ int config_load(const char *path) {
     rc = -1;
   }
   // "http://" + domain replaces the 23-byte "https://auth.hitman.io" in the game.
+  if (parse_upstream()) rc = -1;
   if (strlen(g_cfg.patch_domain) > 15) {
     fprintf(stderr, "config: patch_domain must be at most 15 characters\n");
     rc = -1;

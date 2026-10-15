@@ -382,8 +382,23 @@ int db_save_events(const char *user_id, const hs_event_t *events, size_t n, int6
   int64_t start = now_micros();
   if (start <= last) start = last + 1;
 
+  size_t dups = 0;
   for (size_t i = 0; i < n; i++) {
     const hs_event_t *e = &events[i];
+    if (e->id) {  // already stored: answer with the ticks it got the first time
+      st = prep("SELECT ticks FROM events WHERE user_id = ? AND id = ?");
+      if (!st) goto fail;
+      bind_text(st, 1, user_id);
+      bind_text(st, 2, e->id);
+      int64_t prior = -1;
+      if (sqlite3_step(st) == SQLITE_ROW) prior = sqlite3_column_int64(st, 0);
+      sqlite3_finalize(st);
+      if (prior >= 0) {
+        ticks_out[i] = prior;
+        dups++;
+        continue;
+      }
+    }
     ticks_out[i] = start + (int64_t)i;
     st = prep("INSERT INTO events (user_id, ticks, id, name, contract_session_id, contract_id, timestamp, origin, "
               "value, xp_gain) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
@@ -413,6 +428,7 @@ int db_save_events(const char *user_id, const hs_event_t *events, size_t n, int6
     }
   }
   if (commit()) goto fail;
+  if (dups) LOGI("events: %zu of %zu were already stored (retransmission), not stored again", dups, n);
   rc = 0;
   goto out;
 fail:

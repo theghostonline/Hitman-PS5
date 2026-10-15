@@ -159,16 +159,22 @@ def main(binary, remote=None):
         check(init["token"] and init["profileid"] in init["token"], "Init token field present")
         check(init["serverversion"] == "8.12.0" and init["servertimeutc"].endswith("Z"), "serverversion, servertimeutc")
         profile_id = init["profileid"]
-        # The PS5 client reaches Init before any OAuth call, so Init falls back to the local
-        # profile instead of refusing. (Peacock's PC flow authenticates first; this is the PS5
-        # offline-console behaviour.)
+        # Over http the client sends no Authorization header at all (sub_c43dee only adds it for
+        # https/wss). Requests from the console itself resolve to the token the game got from
+        # its own /oauth/token: the same profile, never a separate fallback one.
+        st, init_noauth = srv.request("GET", "/authentication/api/configuration/Init?configName=ps4-prod")
+        check(st == 200 and init_noauth["profileid"] == profile_id, "Init without Authorization is the game's own login")
         st, init2 = srv.request("GET", "/authentication/api/configuration/Init", headers={"Authorization": "bearer nope"})
-        check(st == 200 and re.fullmatch(r"[0-9a-f-]{36}", init2["profileid"]), "Init without a valid token uses the local profile")
+        check(st == 200 and init2["profileid"] == profile_id, "Init with a stale token from the console: same profile")
 
         print("offline cache diff, profile (4.6)")
         st, diff = srv.rpc(access, "AuthenticationService", "GetBlobOfflineCacheDatabaseDiff", {})
-        check(st == 200 and isinstance(diff, list) and any("ioiaccount" in d for d in diff),
-              "GetBlobOfflineCacheDatabaseDiff lists the ioiaccount config")
+        check(st == 200 and diff == [], "GetBlobOfflineCacheDatabaseDiff lists no menu files standalone mode cannot serve")
+        st, _ = srv.rpc(access, "ProfileService", "UpdateUserSaveFileTable",
+                        {"clientSaveFileList": [], "deletedSaveFileList": []})
+        check(st == 204, "UpdateUserSaveFileTable with the captured empty body is 204")
+        st, _ = srv.rpc(access, "ProfileService", "UpdateUserSaveFileTable", {"clientSaveFileList": {}})
+        check(st == 400, "UpdateUserSaveFileTable with a non-array list is 400")
         st, prof = srv.rpc(access, "ProfileService", "GetProfile", {"id": profile_id, "extensions": EXTENSIONS})
         check(st == 200 and prof["Id"] == profile_id, "GetProfile Id")
         check(prof["LinkedAccounts"] == {"ps4": ACCOUNT_ID, "ps4onlineid": "Agent47"}, "LinkedAccounts ps4/ps4onlineid")
@@ -198,16 +204,21 @@ def main(binary, remote=None):
         check(st == 200 and set(ev) == {"SavedTokens", "NewEvents", "NextPoll", "PushMessages"}, "response keys")
         check(len(ev["SavedTokens"]) == 2 and int(ev["SavedTokens"][1]) > int(ev["SavedTokens"][0]), "one token per event")
         check(ev["NewEvents"] is None and ev["PushMessages"] is None and ev["NextPoll"] == 10, "no server events")
+        body["values"] = events  # retransmission of the same batch
+        st, ev_again = srv.rpc(access, "EventsService", "SaveAndSynchronizeEvents4", body)
+        check(st == 200 and ev_again["SavedTokens"] == ev["SavedTokens"], "retransmitted events get their first ticks back")
         body["values"] = [dict(events[1], Id="e3")]
         st, ev2 = srv.rpc(access, "EventsService", "SaveAndSynchronizeEvents4", body)
         check(int(ev2["SavedTokens"][0]) > int(ev["SavedTokens"][1]), "ticks keep increasing")
+        st, _ = srv.rpc(access, "EventsService", "SaveAndSynchronizeEvents4", dict(body, userId=str(profile_id)[::-1]))
+        check(st == 403, "events for another userId are refused")
         body["values"] = []
         st, ev3 = srv.rpc(access, "EventsService", "SaveAndSynchronizeEvents4", body)
         check(st == 200 and ev3["SavedTokens"] is None, "empty poll")
 
         print("errors and side routes")
         st, prof_fb = srv.rpc("bad", "ProfileService", "GetProfile", {})
-        check(st == 200 and re.fullmatch(r"[0-9a-f-]{36}", prof_fb["Id"]), "RPC with an unknown token uses the local profile")
+        check(st == 200 and prof_fb["Id"] == profile_id, "RPC from the console with an unknown token: the console's login")
         st, _ = srv.rpc(access, "ChallengesService", "GetProgression", {})
         check(st == 404, "unimplemented RPC is 404 (and logged)")
         st, _ = srv.request("GET", "/authentication/api/userchannel/ProfileService/GetProfile")
@@ -222,6 +233,12 @@ def main(binary, remote=None):
                 f.write(b"\x00RPKG" * 1000)
             st, raw = srv.request("GET", "/resources/blob/r.rpkg")
             check(st == 200 and raw == b"\x00RPKG" * 1000, "resource file served")
+            with open(os.path.join(data_dir, "resources", "dynamic_resources_h3.rpkg"), "wb") as f:
+                f.write(b"RPKG2" + bytes(range(256)) * 4)
+            st, raw = srv.request("GET", "/resources-8-25/dynamic_resources_ps5_release_rpkg?sv=2018-03-28&ver=h3")
+            check(st == 200 and raw == b"RPKG2" + bytes(range(256)) * 4, "PS5 release rpkg name maps to the H3 package")
+            st, _ = srv.request("GET", "/resources-8-25/dynamic_resources_pc_release_rpkg")
+            check(st == 404, "other platform rpkg names are not aliased")
         st, _ = srv.request("GET", "/resources/../hitman.db")
         check(st in (400, 404), "no path traversal")
         st, _ = srv.request("GET", "/ws", headers={"Upgrade": "websocket", "Connection": "Upgrade"})
@@ -231,10 +248,7 @@ def main(binary, remote=None):
         st, tok2 = srv.request("POST", "/oauth/token", f"grant_type=refresh_token&refresh_token={refresh}",
                                {"Content-Type": "application/x-www-form-urlencoded"})
         check(st == 200 and tok2["access_token"] != access, "refresh_token grant rotates tokens")
-        # The rotated-out access token is no longer valid, so an RPC with it falls back to the
-        # local profile rather than the token's original profile.
-        st, prof_old = srv.rpc(access, "ProfileService", "GetProfile", {})
-        check(st == 200 and prof_old["Id"] != profile_id, "old access token no longer resolves to its profile")
+        old_access = access
         st, err = srv.request("POST", "/oauth/token", f"grant_type=refresh_token&refresh_token={refresh}",
                               {"Content-Type": "application/x-www-form-urlencoded"})
         check(st == 400 and err["error"] == "invalid_grant", "old refresh token revoked")
@@ -275,6 +289,11 @@ def main(binary, remote=None):
               == [("sess-1", profile_id, "c-1")], "contract session recorded")
         users = db.execute("SELECT psn_account_id, psn_online_id, issuer_id, region, locale FROM users").fetchall()
         check((ACCOUNT_ID, "Agent47_2", "256", "eu", "en") in users, "user row keyed on psn_userid")
+        check(len(users) == 1, "one console login, one profile (no fallback profile created)")
+        check(not db.execute("SELECT 1 FROM auth_tokens WHERE access_token = ?", (old_access,)).fetchone(),
+              "the rotated-out access token is gone")
+        check(db.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='events_user_event_id'").fetchone(),
+              "event Id uniqueness index")
         db.close()
 
         print("takeover")
@@ -287,7 +306,8 @@ def main(binary, remote=None):
     with open(os.path.join(data_dir, "server.log")) as f:
         log = f.read()
     check("clienttype=ps5" in log, "clienttype logged with the event batch")
-    check("authcode=<redacted>" in log, "auth code never logged")
+    check("authcode=<redacted>" in log and "AbC123" not in log, "auth code never logged")
+    check("psn_cid=<redacted>" in log and "device_id=<redacted>" in log, "device identifiers redacted")
     print(f"\n{passed} checks passed (data in {data_dir})")
 
 

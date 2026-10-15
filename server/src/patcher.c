@@ -146,16 +146,24 @@ static bool mem_equals(pid_t pid, intptr_t addr, const void *want, size_t n) {
   return n <= sizeof(got) && mem_read(pid, addr, got, n) == 0 && !memcmp(got, want, n);
 }
 
-// Debugger write first (copy-on-write into read-only pages); if it did not take, open the
-// page up for a kernel copy and restore its protection.
+// Debugger write first (copy-on-write into read-only pages); if it did not take, open the page
+// up for a kernel copy and put its protection back. The page's protection must be known before
+// it is changed, and a failed restore is reported: a page left writable is not silently accepted.
 static int mem_write(pid_t pid, intptr_t addr, const void *buf, size_t n) {
   if (mdbg_copyin(pid, buf, addr, n) == 0 && mem_equals(pid, addr, buf, n)) return 0;
   intptr_t page = addr & ~(intptr_t)(PAGE - 1);
   size_t   span = (size_t)(((addr + (intptr_t)n + PAGE - 1) & ~(intptr_t)(PAGE - 1)) - page);
   int      prot = kernel_get_vmem_protection(pid, page, span);
-  if (kernel_mprotect(pid, page, span, PROT_READ | PROT_WRITE)) return -1;
+  if (prot <= 0) {
+    LOGW("patcher: protection of 0x%lx unknown (%d), not changing it", (long)page, prot);
+    return -1;
+  }
+  if (kernel_mprotect(pid, page, span, prot | PROT_READ | PROT_WRITE)) return -1;
   int rc = kernel_proc_copyin(pid, buf, addr, n);
-  kernel_mprotect(pid, page, span, prot > 0 ? prot : PROT_READ);
+  if (kernel_mprotect(pid, page, span, prot)) {
+    LOGE("patcher: could not restore protection %d on 0x%lx after writing", prot, (long)page);
+    rc = -1;
+  }
   return rc == 0 && mem_equals(pid, addr, buf, n) ? 0 : -1;
 }
 
@@ -375,15 +383,36 @@ static int code_write(pid_t pid, intptr_t addr, const void *buf, size_t n) {
     intptr_t page = addr & ~(intptr_t)(PAGE - 1);
     size_t   span = (size_t)(((addr + (intptr_t)n + PAGE - 1) & ~(intptr_t)(PAGE - 1)) - page);
     int      prot = kernel_get_vmem_protection(pid, page, span);
-    if (prot <= 0) prot = PROT_READ | PROT_EXEC;
+    if (prot <= 0 || !(prot & PROT_EXEC)) {
+      LOGE("patcher: code page 0x%lx protection %d is not the expected executable mapping", (long)page, prot);
+      return -1;
+    }
     if (kernel_mprotect(pid, page, span, prot | PROT_READ | PROT_WRITE | PROT_EXEC)) return -1;
     int rc = kernel_proc_copyin(pid, buf, addr, n);
-    kernel_mprotect(pid, page, span, prot);
+    if (kernel_mprotect(pid, page, span, prot)) {
+      LOGE("patcher: could not restore protection %d on code page 0x%lx", prot, (long)page);
+      rc = -1;
+    }
     if (rc) return -1;
   }
   uint8_t back[STUB_AREA_LEN];
   if (n <= sizeof(back) && mem_read(pid, addr, back, n) == 0 && memcmp(back, buf, n)) return -1;
   return 0;
+}
+
+// The stubs go into the padding after the last function of the text segment. Only write there
+// when it still is padding (zero or int3 bytes) or already holds these exact stubs; anything
+// else means this is not the memory layout the addresses were taken from.
+static bool stub_area_free(pid_t pid, intptr_t addr, const uint8_t *code, size_t n) {
+  uint8_t cur[STUB_AREA_LEN];
+  if (mem_read(pid, addr, cur, STUB_AREA_LEN)) return true;  // execute-only: cannot check, the debug write decides
+  if (!memcmp(cur, code, n)) return true;
+  // Written by an earlier hitman-server (a handoff reload, maybe with another identity): it
+  // starts with the first stub's "push rsi; mov rax, imm64".
+  if (n >= 3 && !memcmp(cur, code, 3) && code[0] == 0x56 && code[1] == 0x48 && code[2] == 0xB8) return true;
+  for (size_t i = 0; i < STUB_AREA_LEN; i++)
+    if (cur[i] != 0x00 && cur[i] != 0xCC) return false;
+  return true;
 }
 
 // Writes the stubs once per game process and (re)points the GOT slots at them. Safe to call on
@@ -426,6 +455,10 @@ static int psn_hooks(pid_t pid, intptr_t base) {
       LOGE("patcher: PSN stubs do not fit (%zu bytes)", code.n);
       return -1;
     }
+    if (!stub_area_free(pid, base + VA_STUB_AREA, code.b, code.n)) {
+      LOGE("patcher: the stub area at 0x%lx is not empty padding, PSN bypass not installed", (long)(base + VA_STUB_AREA));
+      return -1;
+    }
     if (code_write(pid, base + VA_STUB_AREA, code.b, code.n)) {
       LOGE("patcher: writing PSN stubs failed");
       return -1;
@@ -450,8 +483,11 @@ static int psn_hooks(pid_t pid, intptr_t base) {
   return set;
 }
 
-// Returns the eboot base once the game is patched, 0 otherwise.
-static intptr_t patch_process(pid_t pid) {
+typedef enum { PATCH_OK, PATCH_RETRY, PATCH_WRONG_BUILD, PATCH_GONE } patch_rc_t;
+
+// Patches pid. PATCH_OK sets *base_out; PATCH_WRONG_BUILD is final for this process;
+// PATCH_RETRY means it did not complete in time and may be tried again.
+static patch_rc_t patch_process(pid_t pid, intptr_t *base_out) {
   patch_t patches[3] = {
       {"config scheme", VA_SCHEME, "https://{0}", "http://{0}"},
       {"auth fallback host", VA_AUTH_HOST, "https://auth.hitman.io", ""},
@@ -468,7 +504,7 @@ static intptr_t patch_process(pid_t pid) {
     if (waited % 1000000 == 0 && waited && !still_running(pid)) {
       LOGW("patcher: pid %d exited before it was patched", pid);
       set_status("pid %d exited before it was patched", pid);
-      return 0;
+      return PATCH_GONE;
     }
     if (!base) {
       base = kernel_dynlib_mapbase_addr(pid, 0);
@@ -487,7 +523,7 @@ static intptr_t patch_process(pid_t pid) {
                "built for, so nothing was patched", patches[i].what, (long)patches[i].va);
           notify("HITMAN local server: unknown game version, not patched");
           set_status("pid %d: unexpected bytes for %s, not patched", pid, patches[i].what);
-          return 0;
+          return PATCH_WRONG_BUILD;
         }
       }
       if (!ready) continue;
@@ -529,18 +565,44 @@ static intptr_t patch_process(pid_t pid) {
     }
     notify("HITMAN 3 online -> local server (%s)", g_cfg.patch_domain);
     set_status("pid %d patched, game uses http://%s", pid, g_cfg.patch_domain);
-    return base;
+    *base_out = base;
+    return PATCH_OK;
   }
-  LOGW("patcher: gave up on pid %d, online_VersionConfigDomain was never initialised", pid);
-  set_status("pid %d: gave up, online_VersionConfigDomain never initialised", pid);
-  return 0;
+  LOGW("patcher: pid %d not patched within %d s (online_VersionConfigDomain never initialised or a write kept "
+       "failing)", pid, GIVE_UP_US / 1000000);
+  set_status("pid %d: not patched within %d s", pid, GIVE_UP_US / 1000000);
+  return PATCH_RETRY;
 }
+
+// Re-checks the three string sites of a patched process. A site back at its original bytes is
+// written again; anything else is only reported.
+static void verify_patch(pid_t pid, intptr_t base) {
+  patch_t patches[3] = {
+      {"config scheme", VA_SCHEME, "https://{0}", "http://{0}"},
+      {"auth fallback host", VA_AUTH_HOST, "https://auth.hitman.io", ""},
+      {"default config domain", VA_DOMAIN_DEF, "config.hitman.io", ""},
+  };
+  snprintf(patches[1].repl, sizeof(patches[1].repl), "http://%s", g_cfg.patch_domain);
+  snprintf(patches[2].repl, sizeof(patches[2].repl), "%s", g_cfg.patch_domain);
+  for (int i = 0; i < 3; i++) {
+    int st = check(pid, base, &patches[i]);
+    if (st == 0) {
+      LOGW("patcher: %s was back to its original bytes, writing it again", patches[i].what);
+      if (write_patch(pid, base, &patches[i])) LOGE("patcher: rewriting %s failed", patches[i].what);
+    } else if (st == -2) {
+      LOGE("patcher: %s holds unexpected bytes after patching", patches[i].what);
+    }
+  }
+}
+
+#define MAX_ATTEMPTS 3
 
 static void *patcher_main(void *arg) {
   (void)arg;
   pid_t    handled = -1;
   intptr_t base = 0;
-  int      last_state = -1000;
+  int      last_state = -1000, attempts = 0, ticks = 0;
+  bool     final = false;
   for (;;) {
     pid_t pid = find_game();
     if (pid <= 0) {
@@ -549,12 +611,35 @@ static void *patcher_main(void *arg) {
       usleep(500 * 1000);
       continue;
     }
-    if (pid != handled) {
-      base = patch_process(pid);
+    if (pid != handled) {  // a new game process
       handled = pid;
+      base = 0;
+      attempts = 0;
+      final = false;
       last_state = -1000;
     }
-    if (base) psn_hooks(pid, base);
+    // A patch that did not complete is tried again (a few times, a few seconds apart) instead
+    // of leaving this process unpatched until the game restarts. A wrong build is never retried.
+    if (!base && !final && attempts < MAX_ATTEMPTS) {
+      attempts++;
+      patch_rc_t rc = patch_process(pid, &base);
+      if (rc == PATCH_WRONG_BUILD || rc == PATCH_GONE) {
+        final = true;
+      } else if (rc == PATCH_RETRY) {
+        if (attempts < MAX_ATTEMPTS) {
+          LOGW("patcher: attempt %d of %d on pid %d did not complete, retrying in 5 s", attempts, MAX_ATTEMPTS, pid);
+          usleep(5 * 1000 * 1000);
+        } else {
+          LOGE("patcher: pid %d not patched after %d attempts; restart the game to try again", pid, MAX_ATTEMPTS);
+          notify("HITMAN local server: game not patched, see server.log");
+          set_status("pid %d: not patched after %d attempts", pid, MAX_ATTEMPTS);
+        }
+      }
+    }
+    if (base) {
+      psn_hooks(pid, base);
+      if (++ticks % 50 == 0) verify_patch(pid, base);  // every ~5 s
+    }
     // Follow the game's connection state so the log shows how far the online flow gets.
     int32_t state;
     if (base && mem_read(pid, base + VA_ONLINE_STATE, &state, sizeof(state)) == 0 && state != last_state) {

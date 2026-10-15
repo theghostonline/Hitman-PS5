@@ -18,7 +18,7 @@ PM_PORT  ?= 8084
 ELF  := hitman-server.elf
 HOST := build/hitman-server-host
 
-SRCS := src/main.c src/config.c src/log.c src/util.c src/http.c src/db.c src/handlers.c src/patcher.c
+SRCS := src/main.c src/config.c src/log.c src/util.c src/http.c src/proxy.c src/db.c src/handlers.c src/patcher.c
 DEPS := $(SRCS) src/hs.h build/schema_sql.h
 
 CFLAGS ?= -O2 -g
@@ -48,6 +48,7 @@ $(HOST): $(DEPS)
 
 test: $(HOST)
 	python3 -I test/flow_test.py $(HOST)
+	python3 -I test/proxy_test.py $(HOST)
 
 # Payload Manager 0.6.x keeps uploads in /data/pldmgr/payloads/local/<name>/ and wants its request
 # marker on every change. A new instance asks the running one to exit before it binds the port.

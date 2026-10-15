@@ -163,6 +163,57 @@ bool http_form_get(const char *form, const char *key, char *out, size_t outlen) 
   return false;
 }
 
+// Values of these keys never reach the log: OAuth codes and tokens, and anything named like a
+// secret. Matching is on the decoded key, case-insensitively, by substring.
+static bool secret_key(const char *k, size_t n) {
+  static const char *const SECRET[] = {"token", "auth", "code", "secret", "password", "pass", "sig", "key", "cid",
+                                       "device_id"};
+  char low[64];
+  if (n >= sizeof(low)) return true;
+  for (size_t i = 0; i < n; i++) low[i] = (char)((k[i] >= 'A' && k[i] <= 'Z') ? k[i] + 32 : k[i]);
+  low[n] = '\0';
+  for (size_t i = 0; i < sizeof(SECRET) / sizeof(SECRET[0]); i++)
+    if (strstr(low, SECRET[i])) return true;
+  return false;
+}
+
+// Copies key=value&... pairs, replacing the value with <redacted> when hide(key) says so.
+static void redact_pairs(const char *in, char *out, size_t n, bool (*hide)(const char *, size_t)) {
+  size_t o = 0;
+  if (!n) return;
+  out[0] = '\0';
+  for (const char *p = in ? in : ""; *p && o + 1 < n;) {
+    const char *amp = strchr(p, '&');
+    size_t len = amp ? (size_t)(amp - p) : strlen(p);
+    const char *eq = memchr(p, '=', len);
+    size_t klen = eq ? (size_t)(eq - p) : len;
+    int w;
+    if (eq && hide(p, klen)) w = snprintf(out + o, n - o, "%s%.*s=<redacted>", o ? "&" : "", (int)klen, p);
+    else w = snprintf(out + o, n - o, "%s%.*s", o ? "&" : "", (int)len, p);
+    if (w < 0 || (size_t)w >= n - o) {
+      o = n - 1;
+      break;
+    }
+    o += (size_t)w;
+    p = amp ? amp + 1 : p + len;
+  }
+  out[o] = '\0';
+}
+
+void http_redact_query(const char *query, char *out, size_t n) { redact_pairs(query, out, n, secret_key); }
+
+// For form bodies the default is the other way round: only fields known to be harmless and
+// useful for debugging the login are shown.
+static bool not_allowlisted(const char *k, size_t n) {
+  static const char *const SHOW[] = {"grant_type", "psn_userid", "pId", "psn_issuerid", "psn_onlineid", "fsp",
+                                     "product_id", "device_type", "locale", "rgn", "gs"};
+  for (size_t i = 0; i < sizeof(SHOW) / sizeof(SHOW[0]); i++)
+    if (strlen(SHOW[i]) == n && !memcmp(SHOW[i], k, n)) return false;
+  return true;
+}
+
+void http_redact_form(const char *form, char *out, size_t n) { redact_pairs(form, out, n, not_allowlisted); }
+
 // ------------------------------------------------------------------ responses
 
 static const char *status_text(int s) {
@@ -176,9 +227,14 @@ static const char *status_text(int s) {
     case 404: return "Not Found";
     case 405: return "Method Not Allowed";
     case 413: return "Payload Too Large";
+    case 414: return "URI Too Long";
+    case 431: return "Request Header Fields Too Large";
     case 500: return "Internal Server Error";
     case 501: return "Not Implemented";
+    case 502: return "Bad Gateway";
     case 503: return "Service Unavailable";
+    case 504: return "Gateway Timeout";
+    case 508: return "Loop Detected";
     default: return "Unknown";
   }
 }
@@ -216,19 +272,22 @@ static int write_response(conn_t *c, http_res_t *res, bool keep_alive, bool head
   char head[1024];
   bool has_file = res->file_path[0] != '\0';
   size_t len = has_file ? (size_t)res->file_size : res->body_len;
+  if (head_only && res->head_length >= 0) len = (size_t)res->head_length;
+  const char *more = res->more_headers ? res->more_headers : "";
   int n;
-  if (res->status == 204 || res->status == 100) {
-    n = snprintf(head, sizeof(head), "HTTP/1.1 %d %s\r\nServer: %s/%s\r\n%sConnection: %s\r\n\r\n",
+  if (res->status == 204 || res->status == 304 || res->status == 100) {
+    n = snprintf(head, sizeof(head), "HTTP/1.1 %d %s\r\nServer: %s/%s\r\n%sConnection: %s\r\n",
                  res->status, status_text(res->status), HS_NAME, HS_VERSION, res->extra_headers,
                  keep_alive ? "keep-alive" : "close");
-    return send_all(c->fd, head, (size_t)n);
+    if (send_all(c->fd, head, (size_t)n) || send_all(c->fd, more, strlen(more))) return -1;
+    return send_all(c->fd, "\r\n", 2);
   }
   n = snprintf(head, sizeof(head),
-               "HTTP/1.1 %d %s\r\nServer: %s/%s\r\nContent-Type: %s\r\nContent-Length: %zu\r\n%sConnection: %s\r\n\r\n",
+               "HTTP/1.1 %d %s\r\nServer: %s/%s\r\nContent-Type: %s\r\nContent-Length: %zu\r\n%sConnection: %s\r\n",
                res->status, status_text(res->status), HS_NAME, HS_VERSION,
                res->content_type ? res->content_type : "application/octet-stream", len, res->extra_headers,
                keep_alive ? "keep-alive" : "close");
-  if (send_all(c->fd, head, (size_t)n)) return -1;
+  if (send_all(c->fd, head, (size_t)n) || send_all(c->fd, more, strlen(more)) || send_all(c->fd, "\r\n", 2)) return -1;
   if (head_only) return 0;  // HEAD: headers only, no body
   if (!has_file) return res->body_len ? send_all(c->fd, res->body, res->body_len) : 0;
 
@@ -250,6 +309,7 @@ static int write_response(conn_t *c, http_res_t *res, bool keep_alive, bool head
 
 static void send_simple(conn_t *c, int status, const char *error) {
   http_res_t res = {0};
+  res.head_length = -1;
   http_res_error(&res, status, error, NULL);
   write_response(c, &res, false, false);
   free(res.body);
@@ -323,41 +383,83 @@ static int read_request(conn_t *c, http_req_t *req, char **head_out) {
   *sp1 = *sp2 = '\0';
   snprintf(req->method, sizeof(req->method), "%s", head);
   if (strncmp(sp2 + 1, "HTTP/1.", 7)) { send_simple(c, 400, "unsupported protocol"); return -1; }
+  // Keep the target as sent (origin-form) for forwarding; parse_target cuts it up.
+  const char *raw = sp1 + 1;
+  if (!strncasecmp(raw, "http://", 7) || !strncasecmp(raw, "https://", 8)) {
+    const char *slash = strchr(strstr(raw, "://") + 3, '/');
+    raw = slash ? slash : "/";
+  }
+  if (strlen(raw) >= sizeof(req->target)) { send_simple(c, 414, "request target too long"); return -1; }
+  snprintf(req->target, sizeof(req->target), "%s", raw);
   if (!parse_target(req, sp1 + 1)) { send_simple(c, 400, "bad request target"); return -1; }
 
-  // Headers.
+  // Headers. Folded lines, names with whitespace and lines without a colon are rejected: this
+  // server forwards requests, so it must not read framing differently from the upstream.
   char *p = line_end + 2;
   while (*p && !(p[0] == '\r' && p[1] == '\n')) {
     char *e = strstr(p, "\r\n");
     *e = '\0';
     char *colon = strchr(p, ':');
-    if (colon && req->nheaders < HTTP_MAX_HEADERS) {
-      *colon = '\0';
-      char *v = colon + 1;
-      while (*v == ' ' || *v == '\t') v++;
-      char *ve = v + strlen(v);
-      while (ve > v && (ve[-1] == ' ' || ve[-1] == '\t')) *--ve = '\0';
-      req->headers[req->nheaders].name = p;
-      req->headers[req->nheaders].value = v;
-      req->nheaders++;
+    size_t name_len = colon ? (size_t)(colon - p) : 0;
+    if (!colon || name_len == 0 || strcspn(p, " \t") < name_len) {
+      send_simple(c, 400, "malformed header line");  // also catches obsolete line folding
+      return -1;
     }
+    if (req->nheaders >= HTTP_MAX_HEADERS) { send_simple(c, 431, "too many headers"); return -1; }
+    *colon = '\0';
+    char *v = colon + 1;
+    while (*v == ' ' || *v == '\t') v++;
+    char *ve = v + strlen(v);
+    while (ve > v && (ve[-1] == ' ' || ve[-1] == '\t')) *--ve = '\0';
+    req->headers[req->nheaders].name = p;
+    req->headers[req->nheaders].value = v;
+    req->nheaders++;
     p = e + 2;
   }
   return 1;
 }
 
-static int read_body(conn_t *c, http_req_t *req) {
-  const char *te = http_header(req, "Transfer-Encoding");
-  const char *cl = http_header(req, "Content-Length");
-  bool chunked = te && strcasestr(te, "chunked");
-  size_t declared = 0;
-  if (!chunked && cl) {
-    char *end;
-    unsigned long long v = strtoull(cl, &end, 10);
-    if (*end || end == cl) { send_simple(c, 400, "bad content-length"); return -1; }
-    if (v > BODY_LIMIT) { send_simple(c, 413, "body too large"); return -1; }
-    declared = (size_t)v;
+// Message framing (RFC 9112 6): Transfer-Encoding must be exactly "chunked" and must not come
+// with a Content-Length; repeated Content-Length headers must agree. Anything else is refused
+// rather than guessed, since a forwarding server that frames differently from its upstream
+// enables request smuggling.
+static int framing(conn_t *c, http_req_t *req, bool *chunked, size_t *declared) {
+  const char *te = NULL, *cl = NULL;
+  int nte = 0;
+  for (int i = 0; i < req->nheaders; i++) {
+    const char *name = req->headers[i].name, *v = req->headers[i].value;
+    if (str_ieq(name, "Transfer-Encoding")) {
+      te = v;
+      nte++;
+    } else if (str_ieq(name, "Content-Length")) {
+      if (cl && strcmp(cl, v)) { send_simple(c, 400, "conflicting content-length"); return -1; }
+      cl = v;
+    }
   }
+  *chunked = false;
+  *declared = 0;
+  if (te) {
+    if (nte > 1 || !str_ieq(te, "chunked")) { send_simple(c, 501, "unsupported transfer-encoding"); return -1; }
+    if (cl) { send_simple(c, 400, "transfer-encoding with content-length"); return -1; }
+    *chunked = true;
+    return 0;
+  }
+  if (cl) {
+    if (!*cl || strspn(cl, "0123456789") != strlen(cl) || strlen(cl) > 12) {
+      send_simple(c, 400, "bad content-length");
+      return -1;
+    }
+    unsigned long long v = strtoull(cl, NULL, 10);
+    if (v > BODY_LIMIT) { send_simple(c, 413, "body too large"); return -1; }
+    *declared = (size_t)v;
+  }
+  return 0;
+}
+
+static int read_body(conn_t *c, http_req_t *req) {
+  bool chunked;
+  size_t declared;
+  if (framing(c, req, &chunked, &declared)) return -1;
   const char *expect = http_header(req, "Expect");
   if (expect && str_ieq(expect, "100-continue") && (chunked || declared > 0)) {
     static const char CONT[] = "HTTP/1.1 100 Continue\r\n\r\n";
@@ -379,16 +481,20 @@ static int read_body(conn_t *c, http_req_t *req) {
   for (;;) {
     char line[128];
     if (conn_read_line(c, line, sizeof(line))) { send_simple(c, 400, "bad chunk"); return -1; }
-    char *end;
-    unsigned long long sz = strtoull(line, &end, 16);
-    if (end == line) { send_simple(c, 400, "bad chunk size"); return -1; }
+    // chunk-size [;extensions]: 1-8 hex digits keeps the value far below any overflow.
+    size_t digits = strspn(line, "0123456789abcdefABCDEF");
+    if (digits == 0 || digits > 8 || (line[digits] && line[digits] != ';' && line[digits] != ' ' && line[digits] != '\t')) {
+      send_simple(c, 400, "bad chunk size");
+      return -1;
+    }
+    unsigned long long sz = strtoull(line, NULL, 16);
     if (sz == 0) {
       do {  // trailers end with an empty line
         if (conn_read_line(c, line, sizeof(line))) return -1;
       } while (line[0]);
       break;
     }
-    if (len + sz > BODY_LIMIT) { send_simple(c, 413, "body too large"); return -1; }
+    if (sz > BODY_LIMIT - len) { send_simple(c, 413, "body too large"); return -1; }
     if (len + sz > cap) {
       while (len + sz > cap) cap *= 2;
       char *nb = realloc(req->body, cap + 1);
@@ -423,6 +529,7 @@ static void *conn_main(void *arg) {
   for (;;) {
     http_req_t req = {0};
     http_res_t res = {0};
+    res.head_length = -1;
     char *head = NULL;
     snprintf(req.peer, sizeof(req.peer), "%s", c->peer);
     req.peer_loopback = c->loopback;
@@ -453,6 +560,7 @@ static void *conn_main(void *arg) {
       http_res_error(&res, 501, "websockets_disabled", NULL);
       write_response(c, &res, false, false);
       free(res.body);
+      free(res.more_headers);
       free(head);
       break;
     }
@@ -462,6 +570,7 @@ static void *conn_main(void *arg) {
     // The HITMAN client HEADs some files (e.g. the privacy policy) before GETting them. Route a
     // HEAD as a GET so the handler produces the same headers, then send no body.
     bool head_only = str_ieq(req.method, "HEAD");
+    req.is_head = head_only;
     if (head_only) snprintf(req.method, sizeof(req.method), "GET");
 
     struct timeval t0, t1;
@@ -472,10 +581,13 @@ static void *conn_main(void *arg) {
     long ms = (t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_usec - t0.tv_usec) / 1000;
     if (res.close) keep_alive = false;
 
-    LOGI("%s %s%s %s%s%s -> %d (%ld ms)", c->peer, head_only ? "HEAD " : "", req.method, req.path,
-         req.query[0] ? "?" : "", req.query, res.status, ms);
+    char query[512];
+    http_redact_query(req.query, query, sizeof(query));
+    LOGI("%s %s %s%s%s -> %d (%ld ms, %zu bytes)", c->peer, head_only ? "HEAD" : req.method, req.path,
+         query[0] ? "?" : "", query, res.status, ms, res.file_path[0] ? (size_t)res.file_size : res.body_len);
     int w = write_response(c, &res, keep_alive, head_only);
     free(res.body);
+    free(res.more_headers);
     free(req.body);
     free(head);
     if (w || !keep_alive) break;

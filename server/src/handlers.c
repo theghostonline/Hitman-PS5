@@ -18,12 +18,6 @@
 #define PATH_METRICS       "api/metrics/add"
 #define PATH_RESOURCES     "resources"
 
-// The PS5 client's PSN auth code path is bypassed on an offline console, so it never POSTs to
-// /oauth/token. This single-user preservation server binds its stored profile to one fixed local
-// PSN identity, created on demand when an unauthenticated request arrives.
-#define HS_LOCAL_PSN_ACCOUNT "1000000000000000001"
-#define HS_LOCAL_PSN_ONLINE  "Player"
-
 static json_t *g_seed;  // extensions every new profile starts with (seed_extensions file)
 
 int app_init(void) {
@@ -74,26 +68,34 @@ static bool bearer_token(const http_req_t *req, char *out, size_t n) {
   return true;
 }
 
-// Falls back to the local profile when there is no valid bearer token: the PS5 client calls the
-// RPC endpoints without ever authenticating (its PSN auth code path is bypassed).
+// Resolves the caller's profile from its bearer token. The game only sends the token over https
+// (sub_c43dee checks the URL scheme, docs/PS5_GHIDRA_FINDINGS.md) and the patch makes it http, so
+// requests from the console itself use the token the game got from its own /oauth/token instead.
+// After a server restart that token is not in memory yet; the console's most recent login is
+// used then. LAN clients must send a valid token: nothing on the network can act as the console.
 static bool require_user(http_req_t *req, http_res_t *res, char user_id[HS_ID_LEN + 1]) {
-  char token[256];
-  if (bearer_token(req, token, sizeof(token))) {
-    int rc = db_user_for_token(token, user_id);
-    if (rc == 0) return true;
+  char token[4096];
+  bool have = bearer_token(req, token, sizeof(token)) || (req->peer_loopback && proxy_session_token(token, sizeof(token)));
+  int rc = have ? db_user_for_token(token, user_id) : 1;
+  if (rc < 0) {
+    http_res_error(res, 500, "server_error", NULL);
+    return false;
+  }
+  if (rc == 0) return true;
+  if (req->peer_loopback) {
+    rc = db_user_for_latest_token(user_id);
+    if (rc == 0) {
+      LOGI("%s: no live session token, using the console's most recent login (profile %s)", req->path, user_id);
+      return true;
+    }
     if (rc < 0) {
       http_res_error(res, 500, "server_error", NULL);
       return false;
     }
-    LOGW("unknown or expired access token, falling back to the local profile");
   }
-  bool created = false;
-  if (db_login_psn(HS_LOCAL_PSN_ACCOUNT, HS_LOCAL_PSN_ONLINE, NULL, NULL, NULL, g_seed, user_id, &created)) {
-    http_res_error(res, 500, "server_error", NULL);
-    return false;
-  }
-  if (created) LOGI("created the local profile %s", user_id);
-  return true;
+  LOGW("%s from %s: no valid bearer token and no login on this console yet", req->path, req->peer);
+  http_res_error(res, 401, "unauthorized", "log in with /oauth/token first");
+  return false;
 }
 
 static json_t *json_body(http_req_t *req, http_res_t *res) {
@@ -231,19 +233,10 @@ static void send_tokens(http_res_t *res, const char *access, const char *refresh
 
 static void log_oauth_fields(const oauth_body_t *b) {
   if (!b->form) return;
-  // Field meanings are partly open (network map section 8), so record what the console sends.
-  char line[1024] = "";
-  size_t o = 0;
-  for (const char *p = b->form; *p && o + 2 < sizeof(line);) {
-    const char *amp = strchr(p, '&');
-    size_t len = amp ? (size_t)(amp - p) : strlen(p);
-    bool secret = !strncmp(p, "authcode=", 9) || !strncmp(p, "refresh_token=", 14);
-    const char *eq = memchr(p, '=', len);
-    size_t show = secret && eq ? (size_t)(eq - p) + 1 : len;
-    o += (size_t)snprintf(line + o, sizeof(line) - o, "%s%.*s%s", o ? " " : "", (int)show, p, secret ? "<redacted>" : "");
-    if (o >= sizeof(line)) break;
-    p = amp ? amp + 1 : p + len;
-  }
+  // Field meanings are partly open (network map section 8), so record what the console sends,
+  // with every value outside a short allowlist redacted (http_redact_form).
+  char line[1024];
+  http_redact_form(b->form, line, sizeof(line));
   LOGI("oauth fields: %s", line);
 }
 
@@ -291,6 +284,7 @@ static void h_oauth(http_req_t *req, http_res_t *res) {
     }
     LOGI("login: psn_userid=%s psn_onlineid=%s -> profile %s%s", account_id, online_id ? online_id : "-", user_id,
          created ? " (new)" : "");
+    if (req->peer_loopback) proxy_remember_token(access);
     send_tokens(res, access, refresh);
   } else if (!strcmp(grant, "refresh_token")) {
     char old[256];
@@ -305,6 +299,7 @@ static void h_oauth(http_req_t *req, http_res_t *res) {
       http_res_error(res, 500, "server_error", NULL);
     } else {
       LOGI("refresh: profile %s", user_id);
+      if (req->peer_loopback) proxy_remember_token(access);
       send_tokens(res, access, refresh);
     }
   } else {
@@ -319,9 +314,7 @@ done:
 
 static void h_init(http_req_t *req, http_res_t *res) {
   if (!method_is(req, res, "GET")) return;
-  // The PS5 client reaches Init straight after the config, before any /oauth/token call (its PSN
-  // auth code path is bypassed on an offline console). require_user falls back to the local
-  // profile, so Init always resolves to one.
+  // Init comes right after /oauth/token and without a bearer header (http, see require_user).
   char user_id[HS_ID_LEN + 1];
   if (!require_user(req, res, user_id)) return;
   LOGI("init: profile %s (%s)", user_id, req->query);
@@ -468,7 +461,13 @@ static void rpc_events(http_req_t *req, http_res_t *res, const char *user_id) {
   if (json_is_string(ct)) snprintf(clienttype, sizeof(clienttype), "%s", json_string_value(ct));
   else if (json_is_integer(ct)) snprintf(clienttype, sizeof(clienttype), "%lld", (long long)json_integer_value(ct));
   const char *body_user = jstr(body, "userId");
-  if (body_user && strcmp(body_user, user_id)) LOGD("events: body userId %s differs from token profile %s", body_user, user_id);
+  if (body_user && strcmp(body_user, user_id)) {
+    // Upstream answers 403 here too (eventHandler.ts): events are never filed under someone else.
+    LOGW("events: body userId %s is not the caller's profile %s, refused", body_user, user_id);
+    http_res_error(res, 403, "forbidden", "userId is not the caller's profile");
+    json_decref(body);
+    return;
+  }
   json_t *last_ticks = json_object_get(body, "lastEventTicks");
   json_t *last_push = json_object_get(body, "lastPushDt");
 
@@ -528,6 +527,24 @@ done:
   json_decref(body);
 }
 
+// Standalone mode keeps no mission saves: the shape is checked and the request acknowledged the
+// way upstream does (204), and anything that would have been saved is reported in the log. Proxy
+// mode stores them in Peacock (profileHandler.ts UpdateUserSaveFileTable).
+static void rpc_save_file_table(http_req_t *req, http_res_t *res, const char *user_id) {
+  json_t *body = json_body(req, res);
+  if (!body) return;
+  json_t *saves = json_object_get(body, "clientSaveFileList");
+  json_t *deleted = json_object_get(body, "deletedSaveFileList");
+  if ((saves && !json_is_array(saves)) || (deleted && !json_is_array(deleted))) {
+    http_res_error(res, 400, "invalid_request", "clientSaveFileList and deletedSaveFileList must be arrays");
+  } else {
+    size_t ns = saves ? json_array_size(saves) : 0, nd = deleted ? json_array_size(deleted) : 0;
+    if (ns || nd) LOGW("profile %s: %zu save(s), %zu deletion(s) not kept: standalone mode has no save storage", user_id, ns, nd);
+    http_res_empty(res, 204);
+  }
+  json_decref(body);
+}
+
 // ------------------------------------------------------------------ userchannel dispatch
 
 static void h_rpc(http_req_t *req, http_res_t *res, const char *service, const char *method) {
@@ -547,18 +564,17 @@ static void h_rpc(http_req_t *req, http_res_t *res, const char *service, const c
     if (str_ieq(method, "SynchronizeOfflineUnlockables")) { http_res_empty(res, 204); return; }
     if (str_ieq(method, "GetUserConfig")) { http_res_json(res, 200, json_object()); return; }
     if (str_ieq(method, "SetClientEntitlements")) { http_res_json(res, 200, json_string("null")); return; }
-    // Peacock returns 204; the save file itself lives in the profile extensions, not a table here.
-    if (str_ieq(method, "UpdateUserSaveFileTable")) { http_res_empty(res, 204); return; }
+    if (str_ieq(method, "UpdateUserSaveFileTable")) { rpc_save_file_table(req, res, user_id); return; }
     if (str_ieq(method, "UpdateProfileStats")) { http_res_empty(res, 204); return; }
     if (str_ieq(method, "GetPlatformEntitlements")) { http_res_json(res, 200, json_array()); return; }
   } else if (str_ieq(service, "EventsService")) {
     if (str_ieq(method, "SaveAndSynchronizeEvents4")) { rpc_events(req, res, user_id); return; }
   } else if (str_ieq(service, "AuthenticationService")) {
-    // Flow steps 21-22. Peacock's h3 diff lists the ioiaccount menu config; the client then
-    // fetches it from the resources path.
+    // Flow steps 21-22: the menu files the client should take from the server instead of its
+    // offline cache. Standalone mode serves no menu files, so it lists none (upstream answers
+    // with the files its menu system really serves).
     if (str_ieq(method, "GetBlobOfflineCacheDatabaseDiff")) {
-      http_res_json(res, 200,
-                    json_pack("[s]", "menusystem/elements/settings/ioiaccount/ioiaccount_maintab.json"));
+      http_res_json(res, 200, json_array());
       return;
     }
     if (str_ieq(method, "RenewBlobSignature")) {
@@ -636,9 +652,11 @@ static void h_resource(http_req_t *req, http_res_t *res, const char *rel) {
     http_res_error(res, 400, "invalid_request", "bad resource path");
     return;
   }
-  // The PS5 build asks for dynamic_resources_ps5_release_rpkg; the content is the same H3 menu
-  // resource package Peacock ships as dynamic_resources_h3.rpkg. Map the platform names to it.
-  if (str_iprefix(rel, "dynamic_resources_")) rel = "dynamic_resources_h3.rpkg";
+  // The PS5 build asks for dynamic_resources_ps5_release_rpkg (dynamic_resources_{0}_{1}_rpkg,
+  // sub_c7bb7c). Upstream ships one H3 package for it; the console mounted that file on
+  // 2026-10-15 (online state 24). Only that exact name is mapped: any other platform or
+  // version name is a 404 rather than a guess.
+  if (str_ieq(rel, "dynamic_resources_ps5_release_rpkg")) rel = "dynamic_resources_h3.rpkg";
 
   char path[1024];
   snprintf(path, sizeof(path), "%s/%s", g_cfg.resources_dir, rel);
@@ -679,8 +697,34 @@ static void h_shutdown(http_req_t *req, http_res_t *res) {
 
 // ------------------------------------------------------------------ router
 
+static void h_healthz(http_req_t *req, http_res_t *res) {
+  char patcher[256], upstream[512];
+  patcher_status(patcher, sizeof(patcher));
+  if (g_cfg.upstream[0]) proxy_status(upstream, sizeof(upstream));
+  else snprintf(upstream, sizeof(upstream), "none: standalone mode, built-in handlers");
+  http_res_json(res, 200, json_pack("{s:b, s:s, s:s, s:s, s:s, s:s}", "ok", 1, "name", HS_NAME, "version", HS_VERSION,
+                                    "mode", g_cfg.upstream[0] ? "proxy" : "standalone", "upstream", upstream,
+                                    "patcher", g_cfg.patch_enabled ? patcher : "disabled in config.ini"));
+}
+
 void app_handle(http_req_t *req, http_res_t *res) {
   const char *p = req->path;
+
+  // Served here in both modes: status and the loopback-only handoff used by new builds.
+  if (str_ieq(p, "/healthz")) { h_healthz(req, res); return; }
+  if (str_ieq(p, "/admin/shutdown")) { h_shutdown(req, res); return; }
+
+  // Unless lan_access = full, the LAN only gets /healthz: game routes are for the console.
+  if (!req->peer_loopback && !g_cfg.lan_full) {
+    LOGW("refused %s %s from %s (lan_access = health)", req->is_head ? "HEAD" : req->method, p, req->peer);
+    http_res_error(res, 403, "forbidden", "only /healthz is served to the LAN (lan_access = health)");
+    return;
+  }
+
+  if (g_cfg.upstream[0]) {
+    proxy_forward(req, res);
+    return;
+  }
 
   // The PS5 client fetches the root (GET / with Accept: application/json, UA hitman6/.../sceCURL)
   // at BEGIN_CONNECTION_FLOW, before the config URL. The shape it wants here is not in the network
@@ -727,14 +771,6 @@ void app_handle(http_req_t *req, http_res_t *res) {
     // bloburl is /resources-{version}/..., where the client appends rpkg names.
     const char *slash = strchr(p + 1, '/');
     { h_resource(req, res, slash ? slash + 1 : ""); return; }
-  } else if (str_ieq(p, "/healthz")) {
-    char patcher[256];
-    patcher_status(patcher, sizeof(patcher));
-    http_res_json(res, 200, json_pack("{s:b, s:s, s:s, s:s}", "ok", 1, "name", HS_NAME, "version", HS_VERSION,
-                                      "patcher", g_cfg.patch_enabled ? patcher : "disabled in config.ini"));
-    return;
-  } else if (str_ieq(p, "/admin/shutdown")) {
-    { h_shutdown(req, res); return; }
   }
   not_found(req, res);
 }

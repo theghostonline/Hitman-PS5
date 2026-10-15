@@ -9,7 +9,7 @@
 #include <jansson.h>
 
 #define HS_NAME    "hitman-server"
-#define HS_VERSION "0.1.0"
+#define HS_VERSION "0.2.0"
 
 #ifdef __PROSPERO__
 #define HS_DEFAULT_CONFIG "/data/hitman-server/config.ini"
@@ -46,6 +46,13 @@ typedef struct {
   char   psn_online_id[17]; // fallback online id; empty: the PS5 user name
   char   psn_account_id[24];// fallback account id (decimal); empty: derived from the online id
   char   psn_country[4];    // fallback account country
+  // Proxy mode (docs/ARCHITECTURE_PS5_PEACOCK.md): when upstream is set, every game request is
+  // forwarded to the full Peacock server there and the built-in handlers are not used.
+  char   upstream[256];     // "http://<ipv4>:<port>"; empty: standalone (legacy) mode
+  char   upstream_host[64]; // parsed from upstream
+  int    upstream_port;
+  int    upstream_timeout;  // seconds for one upstream exchange
+  bool   lan_full;          // lan_access = full: LAN peers may use every route, not just /healthz
 } hs_config_t;
 
 extern hs_config_t g_cfg;
@@ -92,6 +99,8 @@ typedef struct {
   size_t        body_len;
   char          peer[64];
   bool          peer_loopback;
+  bool          is_head;        // the client sent HEAD (method is rewritten to GET for routing)
+  char          target[2048];   // raw request target as sent (origin-form), for forwarding
 } http_req_t;
 
 typedef struct {
@@ -102,6 +111,8 @@ typedef struct {
   char        file_path[1024];  // when set, the file is streamed instead of body
   off_t       file_size;
   char        extra_headers[512];  // extra response header lines, each ending in CRLF
+  char       *more_headers;     // malloc'd extra header lines (forwarded upstream headers), owned
+  long long   head_length;      // Content-Length to report for HEAD when >= 0 (proxied HEAD)
   bool        close;            // close the connection after this response
 } http_res_t;
 
@@ -116,6 +127,21 @@ void http_res_error(http_res_t *res, int status, const char *error, const char *
 int  http_listen(const char *bind_addr, int port);  // 0, or an errno value
 void http_run(http_handler_t handler);                // accept loop, returns after http_stop()
 void http_stop(void);
+// The query string with the values of secret-looking keys replaced, for logging.
+void http_redact_query(const char *query, char *out, size_t n);
+// Form body (key=value&...) with every value outside a small allowlist replaced, for logging.
+void http_redact_form(const char *form, char *out, size_t n);
+
+// ---------------------------------------------------------------- proxy.c
+// Forwards req to g_cfg.upstream and fills res with the upstream response (status, headers and
+// body byte for byte). Upstream failures become a 502/504 JSON error.
+void proxy_forward(http_req_t *req, http_res_t *res);
+// One line for /healthz: whether the upstream answers and how fast.
+void proxy_status(char *out, size_t n);
+// The access token the game received from its last successful /oauth/token, attached to game
+// requests that come without one (the client only sends Authorization over https, sub_c43dee).
+bool proxy_session_token(char *out, size_t n);
+void proxy_remember_token(const char *access_token);
 
 // ---------------------------------------------------------------- db.c
 typedef struct {

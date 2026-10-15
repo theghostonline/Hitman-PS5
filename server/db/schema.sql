@@ -50,6 +50,12 @@ CREATE TABLE IF NOT EXISTS events (
   PRIMARY KEY (user_id, ticks)
 );
 CREATE INDEX IF NOT EXISTS events_session ON events(contract_session_id);
+-- A retransmitted event (same Id, e.g. after a timed-out SaveAndSynchronizeEvents4) is stored
+-- once and answered with its original ticks (db.c db_save_events). Older databases may hold
+-- duplicates from before this index; the first copy is kept.
+DELETE FROM events WHERE id IS NOT NULL AND rowid NOT IN
+  (SELECT MIN(rowid) FROM events WHERE id IS NOT NULL GROUP BY user_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS events_user_event_id ON events(user_id, id) WHERE id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS contract_sessions (
   id               TEXT PRIMARY KEY,        -- ContractSessionId
