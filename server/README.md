@@ -31,12 +31,14 @@ The last row is the open item. With the patch in place the game should come to `
 
 The game is hard-wired to `https://config.hitman.io`. Once it's running, the payload's patcher changes four things in its memory (eboot base `0x400000`):
 
-| eboot VA | was | becomes |
-|---|---|---|
-| `0x1c88dc5` | `https://{0}` (config URL scheme) | `http://{0}` |
-| `0x1c558a0` | `https://auth.hitman.io` (auth fallback host) | `http://127.0.0.1:8000` |
-| `0x1c240d4` | `config.hitman.io` (default config domain) | `127.0.0.1:8000` |
-| `0x3c6b510` | `online_VersionConfigDomain`, filled at static init | `127.0.0.1:8000` |
+| eboot VA (01.017.000) | eboot VA (01.041.000) | was | becomes |
+|---|---|---|---|
+| `0x1c88dc5` | `0x20f6945` | `https://{0}` (config URL scheme) | `http://{0}` |
+| `0x1c558a0` | `0x20bad89` | `https://auth.hitman.io` (auth fallback host) | `http://127.0.0.1:8000` |
+| `0x1c240d4` | `0x2105374` | `config.hitman.io` (default config domain) | `127.0.0.1:8000` |
+| `0x3c6b510` | `0x3bbe9d8` | `online_VersionConfigDomain`, filled at static init | `127.0.0.1:8000` |
+
+The build is picked by finding those three strings at one build's addresses; any other build is left alone.
 
 Every site is compared with the expected bytes first. On any other game build nothing is written and you get a notification. Nothing on disk is changed, so the game dump stays as it was.
 

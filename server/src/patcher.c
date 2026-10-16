@@ -64,6 +64,7 @@ typedef struct {
   intptr_t    span;          // end of the eboot's highest segment
   size_t      nlabels;       // add-on labels this build knows (a prefix of KNOWN_LABELS)
   intptr_t    got[NHOOKS];   // GOT slots, in g_hooks order (from the PLT stubs' jmp [rip+x])
+  intptr_t    res_disable;   // OnlineResources_Disable console variable (name pointer; int value at +0x18), 0 if none
 } build_t;
 
 static const build_t BUILDS[] = {
@@ -71,13 +72,16 @@ static const build_t BUILDS[] = {
     // at 0x25719b0 in the file, its pages run to 0x2574000 (TLS template 0x25719c0-0x2571a68).
     {"01.017.000", 0x1c88dc5, 0x1c558a0, 0x1c240d4, 0x3c6b510, 0x3c6b7d8, 0x1c03ce0, 0x2572000, 0x5718000, 23,
      {0x25645c0, 0x25645c8, 0x25645d0, 0x2564a28, 0x2564968, 0x2564888, 0x2564600, 0x2564608, 0x25645f8, 0x25645f0,
-      0x2564648, 0x2564650, 0x2564658, 0x2564660, 0x25645b8}},
+      0x2564648, 0x2564650, 0x2564658, 0x2564660, 0x25645b8}, 0},
     // 01.041.000 (client 8.23.0), eboot.bin (fself) sha256 7a2626a4...1bca. Text ends at 0x1b7821c;
     // the RELRO segment's file part ends at 0x24a4440 (SCE_PROCPARAM last), its pages run to
     // 0x24a8000, and nothing in the eboot points into that tail.
     {"01.041.000", 0x20f6945, 0x20bad89, 0x2105374, 0x3bbe9d8, 0x3c648b8, 0x1b78220, 0x24a5000, 0x567c000, 34,
      {0x2494c08, 0x2494c10, 0x2494c40, 0x2494f98, 0x2494fc8, 0x2494f80, 0x2494c60, 0x2494c68, 0x2494c70, 0x2494c58,
-      0x2494c18, 0x2494c20, 0x2494c30, 0x2494c28, 0x2494c78}},
+      0x2494c18, 0x2494c20, 0x2494c30, 0x2494c28, 0x2494c78},
+     // OnlineResources_Disable defaults to 1 here (static init at 0xcbcfc3), which skips the dynamic
+     // resources fetch (0xcf9067), so the hitman-server package never mounts.
+     0x3bbf258},
 };
 #define NBUILDS (sizeof(BUILDS) / sizeof(BUILDS[0]))
 
@@ -747,6 +751,20 @@ static patch_rc_t patch_process(pid_t pid, intptr_t *base_out) {
     } else {
       cur[16] = '\0';
       LOGW("patcher: online_VersionConfigDomain is already \"%s\" (set elsewhere), leaving it", cur);
+    }
+    // OnlineResources_Disable: its static init stores the name pointer, then the default value.
+    if (g_build->res_disable) {
+      uint64_t name = 0;
+      int32_t  val = 0, zero = 0;
+      if (mem_read(pid, base + g_build->res_disable, &name, sizeof(name)) || !name) continue;
+      if (mem_read(pid, base + g_build->res_disable + 0x18, &val, sizeof(val))) continue;
+      if (val) {
+        if (mem_write(pid, base + g_build->res_disable + 0x18, &zero, sizeof(zero))) {
+          set_status("pid %d: writing OnlineResources_Disable not ready, retrying", pid);
+          continue;
+        }
+        LOGI("patcher: OnlineResources_Disable %d -> 0", val);
+      }
     }
     notify("HITMAN 3 online -> local server (%s)", g_cfg.patch_domain);
     set_status("pid %d patched, game uses http://%s", pid, g_cfg.patch_domain);
