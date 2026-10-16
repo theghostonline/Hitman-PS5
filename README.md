@@ -96,11 +96,21 @@ game version help just as much.
 
 ## Credits
 
-The backend is built on [The Peacock Project](https://github.com/thepeacockproject/Peacock),
-a HITMAN World of Assassination server replacement. Peacock provides the online
-server, the game modes, contracts, progression and the rest of the offline
-online-services logic that this project runs on. Peacock is licensed under
-AGPL-3.0; its license and third-party notices are in `upstream/Peacock/`.
+The backend that runs on your computer is a modified build of
+[The Peacock Project](https://github.com/thepeacockproject/Peacock). That's
+where the game modes, contracts, challenges and progression come from. This
+project isn't affiliated with Peacock.
+
+Everything that gets it working on PS5 was built here: the payload (patching
+the game, the PSN checks, forwarding to the backend), the PS5 changes to the
+backend, the PS5 resource package builder, the launcher, the in-game updater,
+and the reverse engineering of the PS5 version of the game. Every change made
+to the backend is listed in `PS5-CHANGES.md` in the backend zip.
+
+## License
+
+AGPL-3.0, see [LICENSE](LICENSE). Every release has a
+`hitman-ps5-backend-src-<version>.zip` with the full source of the backend.
 
 ## Disclaimer
 

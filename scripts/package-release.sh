@@ -16,6 +16,9 @@ DIST="$ROOT/dist"
 
 mkdir -p "$CACHE" "$DIST"
 [ -f "$SRC/chunk0.js" ] || { echo "no backend build: run scripts/backend.sh build"; exit 1; }
+# AGPL: the source zip is `git archive HEAD`, so uncommitted edits would ship in the build but not the source.
+[ -z "$(git -C "$SRC" status --porcelain --untracked-files=no)" ] || { echo "upstream/Peacock has uncommitted changes: commit them and rebuild"; exit 1; }
+COMMIT="$(git -C "$SRC" rev-parse --short HEAD)"
 
 curl -fsSL -o "$CACHE/SHASUMS256-$NODE_VER.txt" "https://nodejs.org/dist/$NODE_VER/SHASUMS256.txt"
 
@@ -29,7 +32,7 @@ fetch_node() {  # fetch_node <archive name>
 common() {  # common <out dir>
   out="$1"
   mkdir -p "$out/resources" "$out/webui/dist"
-  cp "$SRC/chunk0.js" "$SRC/LICENSE" "$SRC/THIRDPARTYNOTICES.txt" "$out/"
+  cp "$SRC/chunk0.js" "$SRC/LICENSE" "$SRC/THIRDPARTYNOTICES.txt" "$SRC/PS5-CHANGES.md" "$out/"
   cp "$SRC/resources/dynamic_resources_h1.rpkg" "$SRC/resources/dynamic_resources_h2.rpkg" \
      "$SRC/resources/dynamic_resources_h3.rpkg" "$SRC/resources/contracts.prp" \
      "$SRC/resources/locale.json" "$out/resources/"
@@ -41,8 +44,9 @@ common() {  # common <out dir>
      "$ROOT/release/backend/options.ini" "$ROOT/release/backend/config.ini" "$out/"
   printf '%s\n' "$VERSION" > "$out/VERSION"  # the in-game updater compares against this
   cat > "$out/SOURCE.txt" <<EOF
-HITMAN PS5 backend $VERSION, AGPL-3.0 (see LICENSE).
-Source code: hitman-ps5-backend-src-$VERSION.zip on the same release page,
+HITMAN PS5 backend $VERSION, AGPL-3.0 (see LICENSE). A modified version of The Peacock Project
+(https://github.com/thepeacockproject/Peacock), changes listed in PS5-CHANGES.md.
+Source code (commit $COMMIT): hitman-ps5-backend-src-$VERSION.zip on the same release page,
 https://github.com/theghostonline/Hitman-PS5/releases/tag/v$VERSION
 EOF
 }
@@ -81,5 +85,15 @@ build macos-x64 "node-$NODE_VER-darwin-x64.tar.gz"
 build linux-x64 "node-$NODE_VER-linux-x64.tar.xz"
 
 # AGPL: the source of the backend that the zips above are built from.
-git -C "$SRC" archive --format=zip --prefix="hitman-ps5-backend-src-$VERSION/" -o "$DIST/hitman-ps5-backend-src-$VERSION.zip" HEAD
+# The launcher and package builder in the zips come from this repo, so they go in too (under hitman-ps5/).
+src_zip="$DIST/hitman-ps5-backend-src-$VERSION.zip"
+rm -f "$src_zip"
+git -C "$SRC" archive --format=zip --prefix="hitman-ps5-backend-src-$VERSION/" -o "$src_zip" HEAD
+tmp="$(mktemp -d)"
+mkdir -p "$tmp/hitman-ps5-backend-src-$VERSION/hitman-ps5/scripts"
+cp -R "$ROOT/release" "$ROOT/LICENSE" "$tmp/hitman-ps5-backend-src-$VERSION/hitman-ps5/"
+cp "$ROOT/scripts/package-release.sh" "$tmp/hitman-ps5-backend-src-$VERSION/hitman-ps5/scripts/"
+find "$tmp" -name .DS_Store -delete
+(cd "$tmp" && zip -qr -9 "$src_zip" "hitman-ps5-backend-src-$VERSION")
+rm -rf "$tmp"
 echo "$DIST/hitman-ps5-backend-src-$VERSION.zip"
