@@ -60,7 +60,7 @@ def locr_strings(d, lang="en"):
 
 def locrs(url):
     head = read_range(url, 0, 64)
-    index_at, count, index_size, table_size = parse_header(head)
+    index_at, count, index_size, table_size, _ = parse_header(head)
     index = read_range(url, index_at, index_size)
     table = read_range(url, index_at + index_size, table_size)
     off, found = 0, []

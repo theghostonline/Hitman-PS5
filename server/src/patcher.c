@@ -50,12 +50,38 @@ typedef struct {
 
 int sceKernelGetAppInfo(pid_t pid, app_info_t *info);
 
-// HITMAN 3 PPSA16387 01.017.000, eboot.bin sha256 4a7aad32...5bed. Eboot virtual addresses.
-#define VA_SCHEME      0x1c88dc5
-#define VA_AUTH_HOST   0x1c558a0
-#define VA_DOMAIN_DEF  0x1c240d4
-#define VA_DOMAIN_VAR  0x3c6b510
-#define VA_ONLINE_STATE 0x3c6b7d8  // ZOnlineManager+0x18, the connection state the gate in 2 checks
+#define NHOOKS 15
+
+// Eboot virtual addresses of one game build. The build is recognised by the three strings at
+// scheme/auth_host/domain_def, so a build not listed here is never written to.
+typedef struct {
+  const char *version;
+  intptr_t    scheme, auth_host, domain_def;
+  intptr_t    domain_var;    // online_VersionConfigDomain (char[256])
+  intptr_t    online_state;  // ZOnlineManager+0x18, the connection state the gate in 2 checks
+  intptr_t    stub_area;     // after the last function of the text segment, to the end of its page
+  intptr_t    ent_table;     // unused padding at the end of the RELRO segment
+  intptr_t    span;          // end of the eboot's highest segment
+  size_t      nlabels;       // add-on labels this build knows (a prefix of KNOWN_LABELS)
+  intptr_t    got[NHOOKS];   // GOT slots, in g_hooks order (from the PLT stubs' jmp [rip+x])
+} build_t;
+
+static const build_t BUILDS[] = {
+    // 01.017.000, eboot.bin sha256 4a7aad32...5bed. Text ends at 0x1c03cdc; the RELRO segment ends
+    // at 0x25719b0 in the file, its pages run to 0x2574000 (TLS template 0x25719c0-0x2571a68).
+    {"01.017.000", 0x1c88dc5, 0x1c558a0, 0x1c240d4, 0x3c6b510, 0x3c6b7d8, 0x1c03ce0, 0x2572000, 0x5718000, 23,
+     {0x25645c0, 0x25645c8, 0x25645d0, 0x2564a28, 0x2564968, 0x2564888, 0x2564600, 0x2564608, 0x25645f8, 0x25645f0,
+      0x2564648, 0x2564650, 0x2564658, 0x2564660, 0x25645b8}},
+    // 01.041.000 (client 8.23.0), eboot.bin (fself) sha256 7a2626a4...1bca. Text ends at 0x1b7821c;
+    // the RELRO segment's file part ends at 0x24a4440 (SCE_PROCPARAM last), its pages run to
+    // 0x24a8000, and nothing in the eboot points into that tail.
+    {"01.041.000", 0x20f6945, 0x20bad89, 0x2105374, 0x3bbe9d8, 0x3c648b8, 0x1b78220, 0x24a5000, 0x567c000, 34,
+     {0x2494c08, 0x2494c10, 0x2494c40, 0x2494f98, 0x2494fc8, 0x2494f80, 0x2494c60, 0x2494c68, 0x2494c70, 0x2494c58,
+      0x2494c18, 0x2494c20, 0x2494c30, 0x2494c28, 0x2494c78}},
+};
+#define NBUILDS (sizeof(BUILDS) / sizeof(BUILDS[0]))
+
+static const build_t *g_build;  // the build of the process being patched
 
 #define PAGE           0x4000
 #define POLL_US        20000
@@ -202,9 +228,8 @@ static bool still_running(pid_t pid) {
 // (sub_c824f0), the online id (sub_c83062, which opens the sign-in dialog when the cached state
 // isn't 2) and a PSN auth code for /oauth/token (sub_c83194). With the console offline from PSN
 // these fail and the game shows NW-102261-2. The game's GOT slots for those imports are pointed at
-// small stubs written into the unused tail of its last code page. Only the game's own calls go
-// through these slots, the system libraries are untouched.
-#define VA_STUB_AREA  0x1c03ce0  // text ends at 0x1c03cdc, the code page runs to 0x1c04000
+// small stubs written into the unused tail of its last code page (build_t.stub_area). Only the
+// game's own calls go through these slots, the system libraries are untouched.
 
 // mov eax, value; ret
 static size_t stub_return(code_t *c, uint32_t value) {
@@ -296,30 +321,28 @@ static size_t stub_with_fallback(code_t *c, intptr_t real, fill_t fill, const vo
 }
 
 typedef struct {
-  const char *name;
-  intptr_t    got;   // eboot VA of the GOT slot (from the PLT stub's jmp [rip+x])
+  const char *name;  // the GOT slot is build_t.got[] at the same index
   size_t      stub;  // offset of the stub in the code buffer
 } hook_t;
 
-static hook_t g_hooks[] = {
-    {"sceNpGetOnlineId", 0x25645c0, 0},
-    {"sceNpGetAccountIdA", 0x25645c8, 0},
-    {"sceNpGetAccountCountryA", 0x25645d0, 0},
-    {"sceNpGetState", 0x2564a28, 0},
-    {"sceNpHasSignedUp", 0x2564968, 0},
-    {"sceNpRegisterStateCallbackA", 0x2564888, 0},
-    {"sceNpCreateAsyncRequest", 0x2564600, 0},
-    {"sceNpCheckNpReachability", 0x2564608, 0},
-    {"sceNpPollAsync", 0x25645f8, 0},
-    {"sceNpDeleteRequest", 0x25645f0, 0},
-    {"sceNpAuthCreateAsyncRequest", 0x2564648, 0},
-    {"sceNpAuthGetAuthorizationCodeV3", 0x2564650, 0},
-    {"sceNpAuthPollAsync", 0x2564658, 0},
-    {"sceNpAuthDeleteRequest", 0x2564660, 0},
-    {"sceNpEntitlementAccessGetAddcontEntitlementInfoList", 0x25645b8, 0},  // only with add-ons to add
+static hook_t g_hooks[NHOOKS] = {
+    {"sceNpGetOnlineId", 0},
+    {"sceNpGetAccountIdA", 0},
+    {"sceNpGetAccountCountryA", 0},
+    {"sceNpGetState", 0},
+    {"sceNpHasSignedUp", 0},
+    {"sceNpRegisterStateCallbackA", 0},
+    {"sceNpCreateAsyncRequest", 0},
+    {"sceNpCheckNpReachability", 0},
+    {"sceNpPollAsync", 0},
+    {"sceNpDeleteRequest", 0},
+    {"sceNpAuthCreateAsyncRequest", 0},
+    {"sceNpAuthGetAuthorizationCodeV3", 0},
+    {"sceNpAuthPollAsync", 0},
+    {"sceNpAuthDeleteRequest", 0},
+    {"sceNpEntitlementAccessGetAddcontEntitlementInfoList", 0},  // only with add-ons to add
 };
 #define HOOK_ENTITLEMENTS 14
-#define NHOOKS (sizeof(g_hooks) / sizeof(g_hooks[0]))
 
 int sceUserServiceInitialize(void *params);
 int sceUserServiceGetForegroundUser(int *user_id);
@@ -355,12 +378,13 @@ static void psn_identity(char online_id[17], uint64_t *account_id, char country[
 
 static pid_t    g_hooked_pid = -1;
 static intptr_t g_stub_addr[NHOOKS];
-static size_t   g_stub_used;       // bytes of VA_STUB_AREA the PSN stubs use
+static size_t   g_stub_used;       // bytes of the stub area the PSN stubs use
 static int      g_ent_state;       // 0 not tried, 1 installed, -1 gave up (fits or table failed)
 
 // ---------------------------------------------------------------- add-on entitlements
 // The game asks sceNpEntitlementAccessGetAddcontEntitlementInfoList which add-ons it owns and
-// knows these 23 labels (the table in sub_122fcd0). The system only lists add-ons installed for
+// knows these labels (the table in sub_122fcd0: 23 in 01.017.000; 01.041.000 adds the last 11, in
+// its own order, at 0x126fa6f). The system only lists add-ons installed for
 // the running title, so add-ons installed for another HITMAN 3 title (PPSA01768 and the other
 // SKUs the eboot names) are invisible to PPSA16387. The patcher looks for those under
 // /user/addcont/<title>/<label>/ac.pkg and has the hook add them (x86stub.h).
@@ -370,13 +394,15 @@ static const char *const KNOWN_LABELS[] = {
     "DLC0000000000024", "DLC0000000000025", "0000000007SINS01", "0000000007SINS02", "0000000007SINS03",
     "0000000007SINS04", "0000000007SINS05", "0000000007SINS06", "0000000007SINS07", "0000000007SINSSP",
     "H3TRILOGYPREMIUM", "000000000000EG01", "000000000000EG02",
+    // 01.041.000
+    "000000H3SAPIENZA", "00000000000VR2AC", "000000H3SARAJEVO", "00000H3ELUSIVE01", "00000H3ELUSIVE02",
+    "00000H3ELUSIVE03", "00000H3ELUSIVE04", "00000H3ELUSIVE05", "00000H3ELUSIVE06", "00000H3ELUSIVE07",
+    "00000H3ELUSIVE08",
 };
 #define NKNOWN (sizeof(KNOWN_LABELS) / sizeof(KNOWN_LABELS[0]))
 
-// Unused, mapped, readable padding after the TLS template in the RELRO segment (that segment
-// ends at 0x25719b0 in the file, its pages run to 0x2574000; TLS template 0x25719c0-0x2571a68).
-// The code page is execute-only, so the stub's label table lives here.
-#define VA_ENT_TABLE  0x2572000
+// The stub's label table lives in unused, mapped, readable padding at the end of the RELRO
+// segment (build_t.ent_table), because the code page is execute-only.
 #define ENT_TABLE_MAX 64
 
 typedef struct {
@@ -386,7 +412,7 @@ typedef struct {
 } ent_table_t;
 
 static bool known_label(const char *s) {
-  for (size_t i = 0; i < NKNOWN; i++)
+  for (size_t i = 0; i < g_build->nlabels && i < NKNOWN; i++)
     if (!strcmp(s, KNOWN_LABELS[i])) return true;
   return false;
 }
@@ -427,17 +453,17 @@ static uint32_t collect_addons(ent_table_t *t, char *names, size_t names_len) {
 // an earlier table. Returns false when it is neither.
 static bool write_ent_table(pid_t pid, intptr_t base, const ent_table_t *t) {
   uint8_t cur[sizeof(*t)];
-  if (mem_read(pid, base + VA_ENT_TABLE, cur, sizeof(cur))) {
-    LOGE("patcher: add-on table area 0x%lx is not readable", (long)(base + VA_ENT_TABLE));
+  if (mem_read(pid, base + g_build->ent_table, cur, sizeof(cur))) {
+    LOGE("patcher: add-on table area 0x%lx is not readable", (long)(base + g_build->ent_table));
     return false;
   }
   bool ours = !memcmp(cur, "HSEN", 4), zero = true;
   for (size_t i = 0; i < sizeof(cur) && zero; i++) zero = cur[i] == 0;
   if (!ours && !zero) {
-    LOGE("patcher: add-on table area 0x%lx is in use, add-ons not added", (long)(base + VA_ENT_TABLE));
+    LOGE("patcher: add-on table area 0x%lx is in use, add-ons not added", (long)(base + g_build->ent_table));
     return false;
   }
-  return mem_write(pid, base + VA_ENT_TABLE, t, sizeof(*t)) == 0;
+  return mem_write(pid, base + g_build->ent_table, t, sizeof(*t)) == 0;
 }
 
 // Code writes go through the debugger path, which keeps the page executable. The PLT shares this
@@ -521,33 +547,34 @@ static int psn_hooks(pid_t pid, intptr_t base) {
       LOGE("patcher: PSN stubs do not fit (%zu bytes)", code.n);
       return -1;
     }
-    if (!stub_area_free(pid, base + VA_STUB_AREA, code.b, code.n)) {
-      LOGE("patcher: the stub area at 0x%lx is not empty padding, PSN bypass not installed", (long)(base + VA_STUB_AREA));
+    if (!stub_area_free(pid, base + g_build->stub_area, code.b, code.n)) {
+      LOGE("patcher: the stub area at 0x%lx is not empty padding, PSN bypass not installed",
+           (long)(base + g_build->stub_area));
       return -1;
     }
-    if (code_write(pid, base + VA_STUB_AREA, code.b, code.n)) {
+    if (code_write(pid, base + g_build->stub_area, code.b, code.n)) {
       LOGE("patcher: writing PSN stubs failed");
       return -1;
     }
-    for (size_t i = 0; i < NHOOKS; i++) g_stub_addr[i] = base + VA_STUB_AREA + (intptr_t)g_hooks[i].stub;
+    for (size_t i = 0; i < NHOOKS; i++) g_stub_addr[i] = base + g_build->stub_area + (intptr_t)g_hooks[i].stub;
     g_stub_addr[HOOK_ENTITLEMENTS] = 0;  // installed later, once the game binds the real function
     g_stub_used = code.n;
     g_ent_state = 0;  // the entitlement hook is installed later, once the game binds that function
     g_hooked_pid = pid;
-    LOGI("patcher: %zu bytes of PSN stubs at 0x%lx", code.n, (long)(base + VA_STUB_AREA));
+    LOGI("patcher: %zu bytes of PSN stubs at 0x%lx", code.n, (long)(base + g_build->stub_area));
   }
 
   int set = 0;
   for (size_t i = 0; i < NHOOKS; i++) {
     if (!g_stub_addr[i]) continue;
-    intptr_t slot = base + g_hooks[i].got, now = 0;
+    intptr_t slot = base + g_build->got[i], now = 0;
     if (mem_read(pid, slot, &now, sizeof(now))) continue;
     if (now == g_stub_addr[i]) continue;
     if (mem_write(pid, slot, &g_stub_addr[i], sizeof(intptr_t)) == 0) {
       set++;
       // A slot still pointing into the eboot is unresolved (lazy binding): the game has not called
       // it yet. One pointing into a library means it was called before the hook.
-      bool early = now >= base && now < base + VA_STUB_AREA;
+      bool early = now >= base && now < base + g_build->stub_area;
       LOGI("patcher: %s -> stub (was 0x%lx, %s)", g_hooks[i].name, (long)now,
            early ? "not called yet" : "already called before the hook");
     } else {
@@ -561,17 +588,16 @@ static int psn_hooks(pid_t pid, intptr_t base) {
 // points into a library, not the eboot's lazy stub). Called on each tick until it succeeds or is
 // ruled out, because the game binds that function late (ENTITLEMENTS_SYNCHRONIZE), after the PSN
 // stubs go in. The entitlement stub is written after the PSN stubs in the same padding.
-#define EBOOT_SPAN 0x5718000  // the eboot's largest segment end (see data/eboot_imports_exports)
 
 static void entitlement_hook(pid_t pid, intptr_t base) {
   if (!g_cfg.psn_bypass || !g_cfg.dlc_titles[0] || g_ent_state != 0) return;
 
-  intptr_t slot = base + g_hooks[HOOK_ENTITLEMENTS].got, real = 0;
+  intptr_t slot = base + g_build->got[HOOK_ENTITLEMENTS], real = 0;
   if (mem_read(pid, slot, &real, sizeof(real))) return;
   // A library address (outside the eboot) means the function is bound; an in-eboot address is the
   // lazy stub, bound once the game first calls it (ENTITLEMENTS_SYNCHRONIZE). Log the wait once.
   static bool logged_wait;
-  if (real == 0 || (real >= base && real < base + EBOOT_SPAN)) {
+  if (real == 0 || (real >= base && real < base + g_build->span)) {
     if (!logged_wait) {
       LOGD("patcher: entitlement slot 0x%lx not bound yet (0x%lx), waiting", (long)slot, (long)real);
       logged_wait = true;
@@ -593,13 +619,13 @@ static void entitlement_hook(pid_t pid, intptr_t base) {
 
   static code_t ent;
   memset(&ent, 0, sizeof(ent));
-  size_t off = stub_entitlements(&ent, (uint64_t)real, (uint64_t)(base + VA_ENT_TABLE));
+  size_t off = stub_entitlements(&ent, (uint64_t)real, (uint64_t)(base + g_build->ent_table));
   if (g_stub_used + ent.n > STUB_AREA_LEN) {
     LOGE("patcher: entitlement stub does not fit (%zu + %zu bytes)", g_stub_used, ent.n);
     g_ent_state = -1;
     return;
   }
-  intptr_t at = base + VA_STUB_AREA + (intptr_t)g_stub_used;
+  intptr_t at = base + g_build->stub_area + (intptr_t)g_stub_used;
   if (code_write(pid, at, ent.b, ent.n)) {
     LOGE("patcher: writing the entitlement stub failed");
     g_ent_state = -1;
@@ -620,16 +646,21 @@ static void entitlement_hook(pid_t pid, intptr_t base) {
 
 typedef enum { PATCH_OK, PATCH_RETRY, PATCH_WRONG_BUILD, PATCH_GONE } patch_rc_t;
 
-// Patches pid. PATCH_OK sets *base_out; PATCH_WRONG_BUILD is final for this process;
+static void build_patches(const build_t *b, patch_t p[3]) {
+  patch_t def[3] = {
+      {"config scheme", b->scheme, "https://{0}", "http://{0}"},
+      {"auth fallback host", b->auth_host, "https://auth.hitman.io", ""},
+      {"default config domain", b->domain_def, "config.hitman.io", ""},
+  };
+  snprintf(def[1].repl, sizeof(def[1].repl), "http://%s", g_cfg.patch_domain);
+  snprintf(def[2].repl, sizeof(def[2].repl), "%s", g_cfg.patch_domain);
+  memcpy(p, def, sizeof(def));
+}
+
+// Patches pid. PATCH_OK sets *base_out and g_build; PATCH_WRONG_BUILD is final for this process;
 // PATCH_RETRY means it did not complete in time and may be tried again.
 static patch_rc_t patch_process(pid_t pid, intptr_t *base_out) {
-  patch_t patches[3] = {
-      {"config scheme", VA_SCHEME, "https://{0}", "http://{0}"},
-      {"auth fallback host", VA_AUTH_HOST, "https://auth.hitman.io", ""},
-      {"default config domain", VA_DOMAIN_DEF, "config.hitman.io", ""},
-  };
-  snprintf(patches[1].repl, sizeof(patches[1].repl), "http://%s", g_cfg.patch_domain);
-  snprintf(patches[2].repl, sizeof(patches[2].repl), "%s", g_cfg.patch_domain);
+  patch_t patches[3];
 
   LOGI("patcher: %s is running as pid %d", g_cfg.title_id, pid);
   set_status("patching pid %d", pid);
@@ -648,20 +679,39 @@ static patch_rc_t patch_process(pid_t pid, intptr_t *base_out) {
     }
 
     if (!rodata_done) {
-      int state[3];
-      bool ready = true;
-      for (int i = 0; i < 3; i++) {
-        state[i] = check(pid, base, &patches[i]);
-        if (state[i] == -1) ready = false;
-        if (state[i] == -2) {
-          LOGE("patcher: unexpected bytes for %s at 0x%lx. This is not the 01.017.000 eboot the server was "
-               "built for, so nothing was patched", patches[i].what, (long)patches[i].va);
-          notify("HITMAN local server: unknown game version, not patched");
-          set_status("pid %d: unexpected bytes for %s, not patched", pid, patches[i].what);
-          return PATCH_WRONG_BUILD;
+      // The build is the one whose three strings are all original or already patched. Until one
+      // build's sites are all readable, rodata is not mapped yet.
+      int            state[3];
+      const build_t *match = NULL;
+      bool           readable = false;
+      for (size_t b = 0; b < NBUILDS && !match; b++) {
+        patch_t p[3];
+        build_patches(&BUILDS[b], p);
+        bool all_read = true, ours = true;
+        for (int i = 0; i < 3; i++) {
+          state[i] = check(pid, base, &p[i]);
+          if (state[i] == -1) all_read = false;
+          if (state[i] < 0) ours = false;
+        }
+        readable |= all_read;
+        if (ours) {
+          match = &BUILDS[b];
+          memcpy(patches, p, sizeof(p));
         }
       }
-      if (!ready) continue;
+      if (!match && !readable) continue;
+      if (!match) {
+        char known[128] = "";
+        for (size_t b = 0, o = 0; b < NBUILDS && o < sizeof(known); b++)
+          o += (size_t)snprintf(known + o, sizeof(known) - o, "%s%s", b ? ", " : "", BUILDS[b].version);
+        LOGE("patcher: the game strings are not where any known build has them (%s), so nothing was patched",
+             known);
+        notify("HITMAN local server: unknown game version, not patched");
+        set_status("pid %d: unknown game build (known: %s), not patched", pid, known);
+        return PATCH_WRONG_BUILD;
+      }
+      if (g_build != match) LOGI("patcher: game build %s", match->version);
+      g_build = match;
       // A write can fail transiently when the page is not yet committed. Retry on the next poll
       // rather than aborting; a stuck target shows up as the "gave up" timeout below.
       bool all_written = true;
@@ -682,12 +732,12 @@ static patch_rc_t patch_process(pid_t pid, intptr_t *base_out) {
     // online_VersionConfigDomain is filled from the default during static init. If init ran
     // before the default was patched, it still holds "config.hitman.io": overwrite it.
     char cur[17];
-    if (mem_read(pid, base + VA_DOMAIN_VAR, cur, sizeof(cur))) continue;
+    if (mem_read(pid, base + g_build->domain_var, cur, sizeof(cur))) continue;
     size_t dn = strlen(g_cfg.patch_domain) + 1;
     if (!memcmp(cur, g_cfg.patch_domain, dn)) {
       LOGI("patcher: online_VersionConfigDomain = %s", g_cfg.patch_domain);
     } else if (!memcmp(cur, "config.hitman.io", 17)) {
-      if (mem_write(pid, base + VA_DOMAIN_VAR, g_cfg.patch_domain, dn)) {
+      if (mem_write(pid, base + g_build->domain_var, g_cfg.patch_domain, dn)) {
         set_status("pid %d: writing online_VersionConfigDomain not ready, retrying", pid);
         continue;  // retry on the next poll
       }
@@ -712,13 +762,8 @@ static patch_rc_t patch_process(pid_t pid, intptr_t *base_out) {
 // Re-checks the three string sites of a patched process. A site back at its original bytes is
 // written again; anything else is only reported.
 static void verify_patch(pid_t pid, intptr_t base) {
-  patch_t patches[3] = {
-      {"config scheme", VA_SCHEME, "https://{0}", "http://{0}"},
-      {"auth fallback host", VA_AUTH_HOST, "https://auth.hitman.io", ""},
-      {"default config domain", VA_DOMAIN_DEF, "config.hitman.io", ""},
-  };
-  snprintf(patches[1].repl, sizeof(patches[1].repl), "http://%s", g_cfg.patch_domain);
-  snprintf(patches[2].repl, sizeof(patches[2].repl), "%s", g_cfg.patch_domain);
+  patch_t patches[3];
+  build_patches(g_build, patches);
   for (int i = 0; i < 3; i++) {
     int st = check(pid, base, &patches[i]);
     if (st == 0) {
@@ -778,11 +823,11 @@ static void *patcher_main(void *arg) {
     }
     // Follow the game's connection state so the log shows how far the online flow gets.
     int32_t state;
-    if (base && mem_read(pid, base + VA_ONLINE_STATE, &state, sizeof(state)) == 0 && state != last_state) {
+    if (base && mem_read(pid, base + g_build->online_state, &state, sizeof(state)) == 0 && state != last_state) {
       // Re-read what the config URL is built from, in case the game rewrote it after the patch.
       char scheme[12] = {0}, domain[33] = {0};
-      mem_read(pid, base + VA_SCHEME, scheme, sizeof(scheme) - 1);
-      mem_read(pid, base + VA_DOMAIN_VAR, domain, sizeof(domain) - 1);
+      mem_read(pid, base + g_build->scheme, scheme, sizeof(scheme) - 1);
+      mem_read(pid, base + g_build->domain_var, domain, sizeof(domain) - 1);
       LOGI("patcher: game online state %d (%s), url base \"%s\" with \"%s\"", state, state_name(state), scheme,
            domain);
       set_status("pid %d patched for http://%s; online state %d (%s)", pid, g_cfg.patch_domain, state,

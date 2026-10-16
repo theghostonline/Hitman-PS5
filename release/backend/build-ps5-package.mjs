@@ -45,11 +45,16 @@ function readRange(src, start, length) {
     return buf.subarray(start, start + length)
 }
 
-function parseHeader(head) {
+const isPatch = (src) => /patch/i.test(src.split("/").pop())
+
+// A patch package has a list of deleted ids between the header and its index.
+function parseHeader(head, patch = false) {
     const magic = head.subarray(0, 4).toString("latin1")
     const off = magic === "2KPR" ? 13 : magic === "GKPR" ? 4 : -1
     if (off < 0) throw new Error("not an RPKG")
-    return [off + 12, head.readUInt32LE(off), head.readUInt32LE(off + 4), head.readUInt32LE(off + 8)]
+    const deletions = patch ? head.readUInt32LE(off + 12) : 0
+    return [off + 12 + (patch ? 4 + 8 * deletions : 0), head.readUInt32LE(off), head.readUInt32LE(off + 4),
+        head.readUInt32LE(off + 8), deletions]
 }
 
 function parseTableEntry(table, off) {
@@ -88,8 +93,13 @@ function lz4Decompress(src, size) {
 const indexCache = new Map()
 function loadIndex(src) {
     if (!indexCache.has(src)) {
-        const [indexAt, count, indexSize, tableSize] = parseHeader(readRange(src, 0, 64))
-        indexCache.set(src, { indexAt, count, indexSize, tableSize, index: readRange(src, indexAt, indexSize) })
+        const [indexAt, count, indexSize, tableSize, deletions] = parseHeader(readRange(src, 0, 64), isPatch(src))
+        const deleted = new Set()
+        if (deletions) {
+            const d = readRange(src, indexAt - 8 * deletions, 8 * deletions)
+            for (let i = 0; i < deletions; i++) deleted.add(d.readBigUInt64LE(i * 8))
+        }
+        indexCache.set(src, { indexAt, count, indexSize, tableSize, deleted, index: readRange(src, indexAt, indexSize) })
     }
     return indexCache.get(src)
 }
@@ -98,6 +108,33 @@ function contains(src, wanted) {
     const { count, index } = loadIndex(src)
     for (let i = 0; i < count; i++) if (index.readBigUInt64LE(i * 20) === wanted) return true
     return false
+}
+
+function exists(src) {
+    if (!src.startsWith("ftp://")) return existsSync(src)
+    try {
+        curl(["-m", "20", "-r", "0-3", "-o", "/dev/null", src])
+        return true
+    } catch {
+        return false
+    }
+}
+
+// chunk0.rpkg and its patches next to it (chunk0patch1.rpkg, ...), newest first. A game update
+// replaces resources through the patches, so the newest one holding an id has the current copy.
+function gameSources(chunk0) {
+    const found = [chunk0]
+    const base = chunk0.replace(/\.rpkg$/, "")
+    for (let n = 1; exists(`${base}patch${n}.rpkg`); n++) found.push(`${base}patch${n}.rpkg`)
+    return found.reverse()
+}
+
+function resolve(sources, wanted) {
+    for (const src of sources) {
+        if (contains(src, wanted)) return src
+        if (loadIndex(src).deleted.has(wanted)) return undefined
+    }
+    return undefined
 }
 
 function extract(src, wanted) {
@@ -267,6 +304,7 @@ export function findChunk0(ip) {
         console.log(`FTP server found on port ${port}, looking for HITMAN 3 (${TITLE})...`)
         // The running game's app0 (installed or dump), then dump folders.
         const tries = [`${base}/mnt/sandbox/${TITLE}_000/app0/runtime/chunk0.rpkg`,
+            `${base}/system_ex/app/${TITLE}/runtime/chunk0.rpkg`,
             `${base}/mnt/sandbox/pfsmnt/${TITLE}-app0/runtime/chunk0.rpkg`]
         for (const root of DUMP_ROOTS) {
             for (const name of listDir(base + root)) {
@@ -285,7 +323,11 @@ export function findChunk0(ip) {
 }
 
 export function buildPs5Package({ chunk0, out, resources = join(HERE, "resources"), log = console.log }) {
-    const [entry, repo] = extract(chunk0, BASE_REPO)
+    const sources = gameSources(chunk0)
+    log(`game packages: ${sources.map((s) => s.split("/").pop()).join(", ")}`)
+    const repoSrc = resolve(sources, BASE_REPO)
+    if (!repoSrc) throw new Error(`${hex(BASE_REPO)} is not in the game's packages`)
+    const [entry, repo] = extract(repoSrc, BASE_REPO)
     if (entry.type !== "REPO") throw new Error(`${hex(BASE_REPO)} is a ${entry.type}, not a REPO`)
     JSON.parse(repo.toString("utf8"))
     log(`base repository: ${repo.length} bytes, ${entry.refs} references`)
@@ -314,8 +356,9 @@ export function buildPs5Package({ chunk0, out, resources = join(HERE, "resources
             continue
         }
         const [ps5Id, ps5Path] = target
-        if (!contains(chunk0, ps5Id)) throw new Error(`${ps5Path} is not in the game's chunk0: wrong game version?`)
-        const [ps5Entry] = extract(chunk0, ps5Id)
+        const src = resolve(sources, ps5Id)
+        if (!src) throw new Error(`${ps5Path} is not in the game's packages: wrong game version?`)
+        const [ps5Entry] = extract(src, ps5Id)
         if (ps5Entry.type !== r.type) throw new Error(`${hex(ps5Id)} is a ${ps5Entry.type} on the console, expected ${r.type}`)
         r.hash = ps5Id
     }

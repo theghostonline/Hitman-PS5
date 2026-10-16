@@ -32,7 +32,7 @@ case "${1:-}" in
     ftp="${FTP_PORT:-2121}"
     "$NODE" --version >/dev/null 2>&1 || true
     python3 -I "$ROOT/tools/ps5_dynamic_resources.py" \
-      --chunk0 "ftp://$host:$ftp/data/homebrew/PPSA16387-app0_HITMAN_3/runtime/chunk0.rpkg" \
+      --chunk0 "${CHUNK0:-ftp://$host:$ftp/system_ex/app/PPSA16387/runtime/chunk0.rpkg}" \
       --peacock "$SRC/resources/dynamic_resources_h3.rpkg" \
       --locale "$SRC/resources/locale.json" \
       --store-strings "$SRC/components/ps5/ps5_store_strings.json" \

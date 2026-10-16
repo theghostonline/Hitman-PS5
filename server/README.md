@@ -1,6 +1,6 @@
 # hitman-server
 
-A local online service for **HITMAN 3 on PS5** (`PPSA16387`, 01.017.000) that runs on the console itself as a homebrew payload. No PC is needed: the payload serves the game's online API on the console, keeps your profile in a SQLite database under `/data`, and points the running game at itself in memory.
+A local online service for **HITMAN 3 on PS5** (`PPSA16387`, 01.017.000 or 01.041.000) that runs on the console itself as a homebrew payload. No PC is needed: the payload serves the game's online API on the console, keeps your profile in a SQLite database under `/data`, and points the running game at itself in memory.
 
 This is clean protocol emulation for personal game preservation. It's written from a network map of the game's own client behaviour, it contains no IOI code or content, and it's meant for people who own the game and want it to keep working without IOI's servers. The PC community already has a server that does the same job; this is a separate, independent implementation for the PS5 client.
 
@@ -42,7 +42,7 @@ Every site is compared with the expected bytes first. On any other game build no
 
 ## Install
 
-You need a jailbroken PS5 that loads payloads (tested with Payload Manager 0.6.1 on 13.60) and HITMAN 3 `PPSA16387` 01.017.000.
+You need a jailbroken PS5 that loads payloads (tested with Payload Manager 0.6.1 on 13.60) and HITMAN 3 `PPSA16387` 01.017.000 or 01.041.000.
 
 1. Build it, or take `hitman-server.elf` from a release:
    ```sh

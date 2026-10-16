@@ -8,14 +8,14 @@ After mounting the package it downloads, the PS5 client loads
 and a menu JSON, because PC builds ship their dynamic repository themselves.
 
 This tool reads the console's base repository ([assembly:/repository/pro.repo].ps5_repo) from the
-game's own chunk0.rpkg, over FTP byte ranges, and writes a package with that repository under the
+game's own chunk0.rpkg (or the newest chunk0patchN.rpkg that replaces it), over FTP byte ranges, and writes a package with that repository under the
 dynamic id plus Peacock's resources, stored under the ids of their ".ps5_" paths (Peacock keys them
 by their ".pc_" paths, which the console never looks up; that showed as Peacock's "dynamic
 resource package has not been loaded" modal). The output is derived from the user's own game
 files: it is written to the runtime directory and must not be committed or shared.
 
 usage: python3 -I tools/ps5_dynamic_resources.py \
-          --chunk0 ftp://192.168.0.37:2121/data/homebrew/PPSA16387-app0_HITMAN_3/runtime/chunk0.rpkg \
+          --chunk0 ftp://192.168.0.37:2121/system_ex/app/PPSA16387/runtime/chunk0.rpkg \
           --peacock upstream/Peacock/resources/dynamic_resources_h3.rpkg \
           --out runtime/peacock/ps5/dynamic_resources_ps5.rpkg
 """
@@ -64,7 +64,13 @@ def read_range(src, start, length):
         return f.read(length)
 
 
-def parse_header(head):
+def is_patch(src):
+    return "patch" in src.rsplit("/", 1)[-1].lower()
+
+
+def parse_header(head, patch=False):
+    """(index offset, count, index size, table size, deletions). A patch package has a list of
+    deleted ids between the header and its index."""
     if head[:4] == b"2KPR":
         off = 13
     elif head[:4] == b"GKPR":
@@ -72,7 +78,8 @@ def parse_header(head):
     else:
         raise SystemExit("not an RPKG")
     count, index_size, table_size = struct.unpack_from("<III", head, off)
-    return off + 12, count, index_size, table_size
+    deletions = struct.unpack_from("<I", head, off + 12)[0] if patch else 0
+    return off + 12 + (4 + 8 * deletions if patch else 0), count, index_size, table_size, deletions
 
 
 def parse_table_entry(table, off):
@@ -133,9 +140,45 @@ _index_cache = {}
 def load_index(src):
     if src not in _index_cache:
         head = read_range(src, 0, 64)
-        index_at, count, index_size, table_size = parse_header(head)
+        index_at, count, index_size, table_size, deletions = parse_header(head, is_patch(src))
         _index_cache[src] = (index_at, count, index_size, table_size, read_range(src, index_at, index_size))
+        if deletions:
+            dels = read_range(src, index_at - 8 * deletions, 8 * deletions)
+            _deleted[src] = set(struct.unpack(f"<{deletions}Q", dels))
     return _index_cache[src]
+
+
+def exists(src):
+    if src.startswith("ftp://"):
+        return subprocess.run(["curl", "-fsS", "-m", "20", "-r", "0-3", "-o", "/dev/null", src],
+                              capture_output=True).returncode == 0
+    return os.path.isfile(src)
+
+
+def game_sources(chunk0):
+    """chunk0.rpkg and its patches next to it (chunk0patch1.rpkg, ...), newest first. A game update
+    replaces resources through the patches, so the newest one holding an id has the current copy."""
+    found = [chunk0]
+    base = chunk0[:-len(".rpkg")] if chunk0.endswith(".rpkg") else chunk0
+    n = 1
+    while exists(f"{base}patch{n}.rpkg"):
+        found.append(f"{base}patch{n}.rpkg")
+        n += 1
+    return found[::-1]
+
+
+def resolve(sources, wanted):
+    """The package holding the game's current copy of wanted, or None."""
+    for src in sources:
+        if contains(src, wanted):
+            return src
+        load_index(src)
+        if wanted in _deleted.get(src, ()):
+            return None
+    return None
+
+
+_deleted = {}
 
 
 def contains(src, wanted):
@@ -166,7 +209,7 @@ def extract(src, wanted):
 
 def read_package(path):
     blob = open(path, "rb").read()
-    index_at, count, index_size, table_size = parse_header(blob[:64])
+    index_at, count, index_size, table_size, _ = parse_header(blob[:64])
     table = blob[index_at + index_size:index_at + index_size + table_size]
     out, toff = [], 0
     for i in range(count):
@@ -198,7 +241,7 @@ def write_package(path, resources):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--chunk0", required=True, help="PS5 chunk0.rpkg (path or ftp:// URL)")
+    ap.add_argument("--chunk0", required=True, help="PS5 chunk0.rpkg (path or ftp:// URL); its chunk0patchN.rpkg are found next to it")
     ap.add_argument("--peacock", required=True, help="Peacock's dynamic_resources_h3.rpkg")
     ap.add_argument("--locale", help="Peacock's resources/locale.json; rebuilds the LOCR from it "
                     "(so rebranding takes effect without the Windows HMLanguageTools)")
@@ -207,11 +250,16 @@ def main():
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
 
-    entry, repo = extract(a.chunk0, BASE_REPO)
+    sources = game_sources(a.chunk0)
+    print("game packages: " + ", ".join(src.rsplit("/", 1)[-1] for src in sources))
+    repo_src = resolve(sources, BASE_REPO)
+    if not repo_src:
+        raise SystemExit(f"{BASE_REPO:016X} is not in the game's packages")
+    entry, repo = extract(repo_src, BASE_REPO)
     if entry["type"] != "REPO":
         raise SystemExit(f"{BASE_REPO:016X} is a {entry['type']}, not a REPO")
     json.loads(repo)  # the repository is JSON; refuse anything else
-    print(f"base repository {BASE_REPO:016X}: {len(repo)} bytes, {len(entry['refs'])} references, "
+    print(f"base repository {BASE_REPO:016X} from {repo_src.rsplit('/', 1)[-1]}: {len(repo)} bytes, {len(entry['refs'])} references, "
           f"sha256 {hashlib.sha256(repo).hexdigest()[:16]}")
 
     # Same table entry (type, sizes, references) and data, under the dynamic id, stored plain.
@@ -260,9 +308,10 @@ def main():
                   f"will not use it)", file=sys.stderr)
             continue
         ps5_id, ps5_path = REKEY[r["hash"]]
-        if not contains(a.chunk0, ps5_id):
-            raise SystemExit(f"{ps5_path} ({ps5_id:016X}) is not in the console's chunk0: not this game build?")
-        ps5_entry, _ = extract(a.chunk0, ps5_id)
+        src = resolve(sources, ps5_id)
+        if not src:
+            raise SystemExit(f"{ps5_path} ({ps5_id:016X}) is not in the console's game packages: not this game build?")
+        ps5_entry, _ = extract(src, ps5_id)
         if ps5_entry["type"] != r["type"]:
             raise SystemExit(f"{ps5_id:016X} is a {ps5_entry['type']} on the console, Peacock's is a {r['type']}")
         print(f"  {r['hash']:016X}.{r['type']} -> {ps5_id:016X} {ps5_path}")
