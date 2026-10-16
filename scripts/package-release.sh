@@ -39,6 +39,7 @@ common() {  # common <out dir>
   cp -R "$SRC/webui/dist/assets" "$out/webui/dist/"
   cp "$ROOT/release/backend/start.mjs" "$ROOT/release/backend/build-ps5-package.mjs" \
      "$ROOT/release/backend/options.ini" "$ROOT/release/backend/config.ini" "$out/"
+  printf '%s\n' "$VERSION" > "$out/VERSION"  # the in-game updater compares against this
   cat > "$out/SOURCE.txt" <<EOF
 HITMAN PS5 backend $VERSION, AGPL-3.0 (see LICENSE).
 Source code: hitman-ps5-backend-src-$VERSION.zip on the same release page,
