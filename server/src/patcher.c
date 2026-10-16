@@ -82,6 +82,14 @@ static const build_t BUILDS[] = {
      // OnlineResources_Disable defaults to 1 here (static init at 0xcbcfc3), which skips the dynamic
      // resources fetch (0xcf9067), so the hitman-server package never mounts.
      0x3bbf258},
+    // The "v01.041 -4xx" backport (fakelib + libc for low firmware) ships a newer eboot than
+    // 01.041.000: client 8.25.0, eboot.bin (fself) sha256 7064b7d4...7d07. Text ends at 0x1bd073c;
+    // the RELRO segment's file part ends at 0x25245e0 (SCE_PROCPARAM last), its pages run to
+    // 0x2528000. OnlineResources_Disable defaults to 1 here too (static init at 0xce6423).
+    {"01.041.000 backport", 0x21670dc, 0x212ae9d, 0x2175d38, 0x3c46e58, 0x3cedcf8, 0x1bd0740, 0x2525000, 0x5720000, 38,
+     {0x25147d0, 0x25147d8, 0x2514808, 0x2514b60, 0x2514b90, 0x2514b48, 0x2514828, 0x2514830, 0x2514838, 0x2514820,
+      0x25147e0, 0x25147e8, 0x25147f8, 0x25147f0, 0x2514840},
+     0x3c476d8},
 };
 #define NBUILDS (sizeof(BUILDS) / sizeof(BUILDS[0]))
 
@@ -402,6 +410,8 @@ static const char *const KNOWN_LABELS[] = {
     "000000H3SAPIENZA", "00000000000VR2AC", "000000H3SARAJEVO", "00000H3ELUSIVE01", "00000H3ELUSIVE02",
     "00000H3ELUSIVE03", "00000H3ELUSIVE04", "00000H3ELUSIVE05", "00000H3ELUSIVE06", "00000H3ELUSIVE07",
     "00000H3ELUSIVE08",
+    // client 8.25.0
+    "000000000000EG03", "000000000000EG04", "00000H3ELUSIVE09", "00000H3ELUSIVE10",
 };
 #define NKNOWN (sizeof(KNOWN_LABELS) / sizeof(KNOWN_LABELS[0]))
 

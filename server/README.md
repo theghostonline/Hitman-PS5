@@ -1,6 +1,6 @@
 # hitman-server
 
-A local online service for **HITMAN 3 on PS5** (`PPSA16387`, 01.017.000 or 01.041.000) that runs on the console itself as a homebrew payload. No PC is needed: the payload serves the game's online API on the console, keeps your profile in a SQLite database under `/data`, and points the running game at itself in memory.
+A local online service for **HITMAN 3 on PS5** (`PPSA16387`, 01.017.000, 01.041.000 or the 01.041 backport) that runs on the console itself as a homebrew payload. No PC is needed: the payload serves the game's online API on the console, keeps your profile in a SQLite database under `/data`, and points the running game at itself in memory.
 
 This is clean protocol emulation for personal game preservation. It's written from a network map of the game's own client behaviour, it contains no IOI code or content, and it's meant for people who own the game and want it to keep working without IOI's servers. The PC community already has a server that does the same job; this is a separate, independent implementation for the PS5 client.
 
@@ -31,12 +31,12 @@ The last row is the open item. With the patch in place the game should come to `
 
 The game is hard-wired to `https://config.hitman.io`. Once it's running, the payload's patcher changes four things in its memory (eboot base `0x400000`):
 
-| eboot VA (01.017.000) | eboot VA (01.041.000) | was | becomes |
-|---|---|---|---|
-| `0x1c88dc5` | `0x20f6945` | `https://{0}` (config URL scheme) | `http://{0}` |
-| `0x1c558a0` | `0x20bad89` | `https://auth.hitman.io` (auth fallback host) | `http://127.0.0.1:8000` |
-| `0x1c240d4` | `0x2105374` | `config.hitman.io` (default config domain) | `127.0.0.1:8000` |
-| `0x3c6b510` | `0x3bbe9d8` | `online_VersionConfigDomain`, filled at static init | `127.0.0.1:8000` |
+| eboot VA (01.017.000) | eboot VA (01.041.000) | eboot VA (01.041 backport) | was | becomes |
+|---|---|---|---|---|
+| `0x1c88dc5` | `0x20f6945` | `0x21670dc` | `https://{0}` (config URL scheme) | `http://{0}` |
+| `0x1c558a0` | `0x20bad89` | `0x212ae9d` | `https://auth.hitman.io` (auth fallback host) | `http://127.0.0.1:8000` |
+| `0x1c240d4` | `0x2105374` | `0x2175d38` | `config.hitman.io` (default config domain) | `127.0.0.1:8000` |
+| `0x3c6b510` | `0x3bbe9d8` | `0x3c46e58` | `online_VersionConfigDomain`, filled at static init | `127.0.0.1:8000` |
 
 The build is picked by finding those three strings at one build's addresses; any other build is left alone.
 
@@ -44,7 +44,7 @@ Every site is compared with the expected bytes first. On any other game build no
 
 ## Install
 
-You need a jailbroken PS5 that loads payloads (tested with Payload Manager 0.6.1 on 13.60) and HITMAN 3 `PPSA16387` 01.017.000 or 01.041.000.
+You need a jailbroken PS5 that loads payloads (tested with Payload Manager 0.6.1 on 13.60) and HITMAN 3 `PPSA16387` 01.017.000, 01.041.000 or the 01.041 backport.
 
 1. Build it, or take `hitman-server.elf` from a release:
    ```sh
