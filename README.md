@@ -29,13 +29,13 @@ to the backend. Nothing on disk is changed.
 ## Requirements
 
 - A jailbroken PS5 that loads payloads (tested with Payload Manager 0.6.1 on 13.60)
-- HITMAN 3 `PPSA16387`, version 01.017.000 - (working on 01.041.000, USA PPSA16388 not tested)
+- HITMAN 3 `PPSA16387`, version 01.017.000 or 01.041.000 (USA PPSA16388 not tested)
 - A computer on the same network to run the backend
 
 ## Install
 
 Everything is on the [latest release](https://github.com/theghostonline/Hitman-PS5/releases/latest).
-You need two things from it: `hitman-server-0.3.2.elf` for the PS5, and the
+You need two things from it: `hitman-server-0.3.3.elf` for the PS5, and the
 backend zip for your computer (Windows, macOS Apple Silicon, macOS Intel or Linux).
 Node is bundled, so there's nothing else to install.
 
@@ -50,7 +50,7 @@ Node is bundled, so there's nothing else to install.
 2. **Point the payload at it.** The backend window shows a line like
    `upstream = http://192.168.1.100:8410`. Put that line in the `config.ini`
    from the zip and copy it to the PS5 as `/data/hitman-server/config.ini`.
-3. **Load the payload.** Load `hitman-server-0.3.2.elf` with Payload Manager,
+3. **Load the payload.** Load `hitman-server-0.3.3.elf` with Payload Manager,
    or send it to an elfldr on port 9021.
 4. **Optional:** add `local/hitman-server` to Payload Manager's autoload list so
    it starts on every boot.
@@ -93,6 +93,14 @@ it and keeps the updates coming.
 
 Not able to donate? A star on the repo and a bug report with your firmware and
 game version help just as much.
+
+## Credits
+
+The backend is built on [The Peacock Project](https://github.com/thepeacockproject/Peacock),
+a HITMAN World of Assassination server replacement. Peacock provides the online
+server, the game modes, contracts, progression and the rest of the offline
+online-services logic that this project runs on. Peacock is licensed under
+AGPL-3.0; its license and third-party notices are in `upstream/Peacock/`.
 
 ## Disclaimer
 
