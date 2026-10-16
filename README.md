@@ -29,7 +29,7 @@ to the backend. Nothing on disk is changed.
 ## Requirements
 
 - A jailbroken PS5 that loads payloads (tested with Payload Manager 0.6.1 on 13.60)
-- HITMAN 3 `PPSA16387`, version 01.017.000-01.041.000 (others may work, USA PPSA16388 not tested)
+- HITMAN 3 `PPSA16387`, version 01.017.000 - (working on 01.041.000, USA PPSA16388 not tested)
 - A computer on the same network to run the backend
 
 ## Install
